@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import click
-from exorcist import TaskStatusDB
+from .tasks import TaskStatusDB
 
 from .aws import validate_launch_instance_type
 
@@ -95,9 +96,27 @@ def _build_task_id(region: str, instance_type: str) -> str:
     Returns
     -------
     str
-        Task identifier in ``ec2-launch:<region>:<instance_type>:<uuid4>`` format.
+        Task identifier in ``<region>:<instance_type>:<uuid4>`` format.
     """
-    return f"ec2-launch:{region}:{instance_type}:{uuid.uuid4()}"
+    return f"{region}:{instance_type}:{uuid.uuid4()}"
+
+
+def _resolve_worker_capabilities(launch_task: bool) -> list[str]:
+    """Resolve enabled worker capabilities from CLI flags.
+
+    Parameters
+    ----------
+    launch_task : bool
+        Whether launch-task handling is enabled for this worker instance.
+
+    Returns
+    -------
+    list[str]
+        Enabled worker capability names.
+    """
+    if launch_task:
+        return ["launch-task"]
+    return []
 
 
 @click.group(
@@ -115,6 +134,34 @@ def cli(ctx: click.Context) -> None:
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
+
+
+@cli.command("worker", help="Run worker tasks based on enabled capabilities.")
+@click.option(
+    "--launch-task/--no-launch-task",
+    default=False,
+    show_default=True,
+    type=bool,
+)
+def worker(launch_task: bool) -> None:
+    """Run a worker with explicitly enabled task capabilities.
+
+    Parameters
+    ----------
+    launch_task : bool
+        Whether the worker can run launch tasks.
+
+    Raises
+    ------
+    click.UsageError
+        If no worker capability is enabled.
+    """
+    capabilities = _resolve_worker_capabilities(launch_task=launch_task)
+    if not capabilities:
+        raise click.UsageError(
+            "At least one worker capability must be enabled. Use --launch-task."
+        )
+    click.echo(f"Worker capabilities: {','.join(capabilities)}")
 
 
 @cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")
@@ -158,8 +205,11 @@ def create_launch_task(
     task_id = _build_task_id(normalized_region, normalized_instance_type)
 
     try:
-        task_db = TaskStatusDB.from_filename(normalized_db_path)
-        task_db.add_task(taskid=task_id, requirements=[], max_tries=max_tries)
+        task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
+        task_db.add_task_with_type(
+            taskid=task_id, requirements=[], max_tries=max_tries, task_type="ec2-launch"
+        )
+        # task_db.add_task(taskid=task_id, requirements=[], max_tries=max_tries)
     except Exception as exc:
         raise click.ClickException(
             f"Unable to create task in database '{normalized_db_path}': {exc}"
