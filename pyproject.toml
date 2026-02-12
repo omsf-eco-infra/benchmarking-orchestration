@@ -18,6 +18,8 @@ benchmarking_orchestration = { path = ".", editable = true }
 exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 
 [tool.pixi.tasks]
+test = { cmd = "pytest -q", default-environment = "pixi" }
+test-aws = { cmd = "pytest tests/test_aws.py -q", default-environment = "pixi" }
 
 [tool.pixi.dependencies]
 click = ">=8.3.1,<9"

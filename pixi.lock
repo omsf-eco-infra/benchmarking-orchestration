@@ -607,7 +607,7 @@ packages:
 - pypi: ./
   name: benchmarking-orchestration
   version: 0.1.0
-  sha256: 84c1afaf084c9feaa91a6507cab52bf21f2b2ac1e1f43dc6029c9e748965be49
+  sha256: 246651cbcd3ea3dec593360f31ebe0cdf5d6c404242c73b99902af7668ea1701
   requires_python: '>=3.11'
 - conda: https://conda.anaconda.org/conda-forge/noarch/blinker-1.9.0-pyhff2d567_0.conda
   sha256: f7efd22b5c15b400ed84a996d777b6327e5c402e79e3c534a7e086236f1eb2dc
