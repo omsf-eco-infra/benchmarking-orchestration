@@ -1,6 +1,7 @@
 from typing import Any, Iterable
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 
 def _is_ondemand_g_quota_name(name: str) -> bool:
@@ -110,6 +111,68 @@ def _resolve_vcpus_by_instance_type(
             default_vcpus = instance_type_info["VCpuInfo"]["DefaultVCpus"]
             vcpus_by_type[instance_type] = default_vcpus
     return vcpus_by_type
+
+
+def validate_launch_instance_type(
+    instance_type: str, region: str = "us-east-1", ec2_client: Any = None
+) -> None:
+    """Validate that a launch instance type is G/VT and exists in AWS.
+
+    Parameters
+    ----------
+    instance_type : str
+        EC2 instance type identifier.
+    region : str, default="us-east-1"
+        AWS region used to validate availability.
+    ec2_client : Any, optional
+        Boto3 EC2 client (or compatible test double). When ``None``,
+        a client is created from ``boto3``.
+
+    Raises
+    ------
+    ValueError
+        If the provided instance type is empty or outside G/VT families.
+    RuntimeError
+        If AWS validation fails or the type is unavailable in region.
+    """
+    normalized = instance_type.strip().lower()
+    if not normalized:
+        raise ValueError("instance type cannot be empty.")
+
+    if not _is_ondemand_g_or_vt_instance_type(normalized):
+        raise ValueError(
+            "Instance type must be in the G/VT family (start with 'g' or 'vt')."
+        )
+
+    ec2 = ec2_client or boto3.client("ec2", region_name=region)
+    try:
+        response = ec2.describe_instance_types(InstanceTypes=[normalized])
+    except ClientError as exc:
+        error = exc.response.get("Error", {})
+        code = error.get("Code", "")
+        message = error.get("Message", str(exc))
+        if code in {"InvalidInstanceType", "InvalidParameterValue"}:
+            raise RuntimeError(
+                f"Invalid or unavailable instance type '{normalized}' in region '{region}'."
+            ) from exc
+        raise RuntimeError(
+            f"AWS error while validating instance type '{normalized}' in region '{region}': "
+            f"{code or message}"
+        ) from exc
+    except BotoCoreError as exc:
+        raise RuntimeError(
+            f"AWS error while validating instance type '{normalized}' in region '{region}': {exc}"
+        ) from exc
+
+    resolved_types = {
+        item.get("InstanceType", "").lower()
+        for item in response.get("InstanceTypes", [])
+        if item.get("InstanceType")
+    }
+    if normalized not in resolved_types:
+        raise RuntimeError(
+            f"Invalid or unavailable instance type '{normalized}' in region '{region}'."
+        )
 
 
 def get_ondemand_g_vcpu_quota(
