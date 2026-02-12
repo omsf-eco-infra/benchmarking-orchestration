@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 
 import boto3
 import pytest
@@ -25,26 +26,55 @@ def _build_fake_task_db(store):
             store["db_paths"].append(filename)
             return cls()
 
-        def add_task(self, taskid, requirements, max_tries):
+        def add_task_with_type(self, taskid, requirements, max_tries, task_type):
             store["tasks"].append(
                 {
                     "taskid": taskid,
                     "requirements": requirements,
                     "max_tries": max_tries,
+                    "task_type": task_type,
                 }
             )
 
     return _FakeTaskStatusDB
 
 
-def test_cli_no_args_shows_help_and_hides_quota_command():
+def test_cli_no_args_shows_help_and_lists_worker():
     runner = CliRunner()
     result = runner.invoke(cli_module.cli, [])
 
     assert result.exit_code == 0
     assert "Usage:" in result.output
+    assert "worker" in result.output
     assert "create-launch-task" in result.output
     assert "quota" not in result.output.lower()
+
+
+def test_worker_with_launch_task_capability_exits_success():
+    runner = CliRunner()
+
+    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+
+    assert result.exit_code == 0
+    assert "Worker capabilities: launch-task" in result.output
+
+
+def test_worker_without_capabilities_fails():
+    runner = CliRunner()
+
+    result = runner.invoke(cli_module.cli, ["worker"])
+
+    assert result.exit_code != 0
+    assert "At least one worker capability must be enabled. Use --launch-task." in result.output
+
+
+def test_worker_explicit_no_launch_task_fails():
+    runner = CliRunner()
+
+    result = runner.invoke(cli_module.cli, ["worker", "--no-launch-task"])
+
+    assert result.exit_code != 0
+    assert "At least one worker capability must be enabled. Use --launch-task." in result.output
 
 
 def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
@@ -74,18 +104,17 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
         )
 
         assert result.exit_code == 0
-        assert store["db_paths"] == ["task_status.db"]
+        assert store["db_paths"] == [Path("task_status.db")]
         assert boto3_calls == [{"service_name": "ec2", "region_name": "us-east-1"}]
         assert len(store["tasks"]) == 1
 
         created = store["tasks"][0]
         assert created["requirements"] == []
         assert created["max_tries"] == 1
-        assert created["taskid"] == (
-            "ec2-launch:us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
-        )
+        assert created["task_type"] == "ec2-launch"
+        assert created["taskid"] == "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
         assert (
-            "ec2-launch:us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+            "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
             in result.output
         )
 
@@ -181,12 +210,13 @@ def test_create_launch_task_region_override_is_used(monkeypatch):
 
         assert result.exit_code == 0
         assert boto3_calls == [{"service_name": "ec2", "region_name": "us-west-2"}]
-        assert store["db_paths"] == ["custom.db"]
+        assert store["db_paths"] == [Path("custom.db")]
         assert len(store["tasks"]) == 1
 
         created = store["tasks"][0]
         assert created["max_tries"] == 3
-        assert created["taskid"].startswith("ec2-launch:us-west-2:vt1.3xlarge:")
+        assert created["task_type"] == "ec2-launch"
+        assert created["taskid"].startswith("us-west-2:vt1.3xlarge:")
 
 
 def test_create_launch_task_re_raises_validation_error_as_click_exception(monkeypatch):
