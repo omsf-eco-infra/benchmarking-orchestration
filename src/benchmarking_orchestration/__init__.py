@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 from .tasks import TaskStatusDB
 
-from .aws import validate_launch_instance_type
+from .aws import launch_ec2_instance, validate_launch_instance_type
 
 
 def _normalize_required_value(field_name: str, value: str) -> str:
@@ -101,6 +101,48 @@ def _build_task_id(region: str, instance_type: str) -> str:
     return f"{region}:{instance_type}:{uuid.uuid4()}"
 
 
+def _parse_launch_task_id(taskid: str) -> tuple[str, str]:
+    """Parse a launch task identifier into region and instance type.
+
+    Parameters
+    ----------
+    taskid : str
+        Task identifier in ``<region>:<instance_type>:<uuid4>`` format.
+
+    Returns
+    -------
+    tuple[str, str]
+        Parsed ``(region, instance_type)`` values.
+
+    Raises
+    ------
+    ValueError
+        If the task identifier is malformed or missing required parts.
+    """
+    try:
+        region, instance_type, task_uuid = taskid.split(":", maxsplit=2)
+    except ValueError as exc:
+        raise ValueError(
+            "Invalid launch task ID format. Expected '<region>:<instance_type>:<uuid4>'."
+        ) from exc
+
+    normalized_region = region.strip()
+    normalized_instance_type = instance_type.strip().lower()
+    if not normalized_region or not normalized_instance_type or not task_uuid.strip():
+        raise ValueError(
+            "Invalid launch task ID format. Expected '<region>:<instance_type>:<uuid4>'."
+        )
+
+    try:
+        uuid.UUID(task_uuid.strip())
+    except ValueError as exc:
+        raise ValueError(
+            "Invalid launch task ID format. Expected '<region>:<instance_type>:<uuid4>'."
+        ) from exc
+
+    return normalized_region, normalized_instance_type
+
+
 def _resolve_worker_capabilities(launch_task: bool) -> list[str]:
     """Resolve enabled worker capabilities from CLI flags.
 
@@ -167,11 +209,37 @@ def worker(launch_task: bool, db_path: str) -> None:
     try:
         task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
         task = task_db.check_out_task_with_type(cap)
-        print(task)
     except Exception as exc:
         raise click.ClickException(
-            f"Unable to create task in database '{normalized_db_path}': {exc}"
+            f"Unable to check out task from database '{normalized_db_path}': {exc}"
         ) from exc
+
+    if task is None:
+        click.echo("No available ec2-launch tasks.")
+        return
+
+    try:
+        task_region, task_instance_type = _parse_launch_task_id(task)
+        instance_id = launch_ec2_instance(task_instance_type, region=task_region)
+    except Exception as exc:
+        try:
+            task_db.mark_task_completed(task, success=False)
+        except Exception as mark_exc:
+            raise click.ClickException(
+                f"Failed to process launch task '{task}' and failed to mark it as failed "
+                f"in database '{normalized_db_path}': {mark_exc}. Original error: {exc}"
+            ) from exc
+        raise click.ClickException(f"Failed to process launch task '{task}': {exc}") from exc
+
+    try:
+        task_db.mark_task_completed(task, success=True)
+    except Exception as exc:
+        raise click.ClickException(
+            f"Launched instance '{instance_id}' for task '{task}', but failed to mark it "
+            f"as completed in database '{normalized_db_path}': {exc}"
+        ) from exc
+
+    click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
 
 
 @cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")

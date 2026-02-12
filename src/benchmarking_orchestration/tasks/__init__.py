@@ -9,7 +9,7 @@ import sqlalchemy as sqla
 class TaskStatusDB(exorcist.TaskStatusDB):
     @staticmethod
     def _create_empty_db(metadata, engine):
-        task_type_table = sqla.Table(
+        sqla.Table(
             "task_types",
             metadata,
             sqla.Column("taskid", sqla.String, sqla.ForeignKey("tasks.taskid")),
@@ -23,7 +23,7 @@ class TaskStatusDB(exorcist.TaskStatusDB):
 
     def add_task_type(self, taskid, task_type):
         with self.engine.begin() as conn:
-            res = conn.execute(
+            conn.execute(
                 sqla.insert(self.task_types_table).values(
                     [
                         {"taskid": taskid, "task_type": task_type},

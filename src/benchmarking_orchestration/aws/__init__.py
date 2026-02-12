@@ -3,6 +3,9 @@ from typing import Any, Iterable
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+DEFAULT_LAUNCH_AMI_ID = "ami-07c50216126e6c761"
+DEFAULT_LAUNCH_AMI_REGION = "us-east-1"
+
 
 def _is_ondemand_g_quota_name(name: str) -> bool:
     """Check whether a quota name is for On-Demand G/VT capacity.
@@ -175,6 +178,81 @@ def validate_launch_instance_type(
         )
 
 
+def launch_ec2_instance(
+    instance_type: str, region: str = "us-east-1", ec2_client: Any = None
+) -> str:
+    """Launch a single EC2 instance and return its instance ID.
+
+    Parameters
+    ----------
+    instance_type : str
+        EC2 instance type identifier to launch.
+    region : str, default="us-east-1"
+        AWS region where the launch should occur.
+    ec2_client : Any, optional
+        Boto3 EC2 client (or compatible test double). When ``None``,
+        a client is created from ``boto3``.
+
+    Returns
+    -------
+    str
+        The launched EC2 instance identifier.
+
+    Raises
+    ------
+    ValueError
+        If required inputs are empty.
+    RuntimeError
+        If region policy is violated, AWS launch fails, or response data
+        does not include an instance identifier.
+    """
+    normalized_instance_type = instance_type.strip().lower()
+    if not normalized_instance_type:
+        raise ValueError("instance type cannot be empty.")
+
+    normalized_region = region.strip()
+    if not normalized_region:
+        raise ValueError("region cannot be empty.")
+
+    if normalized_region != DEFAULT_LAUNCH_AMI_REGION:
+        raise RuntimeError(
+            f"Launching with fixed AMI '{DEFAULT_LAUNCH_AMI_ID}' is only supported in "
+            f"region '{DEFAULT_LAUNCH_AMI_REGION}', received '{normalized_region}'."
+        )
+
+    ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    try:
+        response = ec2.run_instances(
+            ImageId=DEFAULT_LAUNCH_AMI_ID,
+            InstanceType=normalized_instance_type,
+            MinCount=1,
+            MaxCount=1,
+        )
+    except ClientError as exc:
+        error = exc.response.get("Error", {})
+        code = error.get("Code", "")
+        message = error.get("Message", str(exc))
+        raise RuntimeError(
+            f"AWS error while launching instance type '{normalized_instance_type}' "
+            f"in region '{normalized_region}': {code or message}"
+        ) from exc
+    except BotoCoreError as exc:
+        raise RuntimeError(
+            f"AWS error while launching instance type '{normalized_instance_type}' "
+            f"in region '{normalized_region}': {exc}"
+        ) from exc
+
+    instances = response.get("Instances", [])
+    first_instance = instances[0] if instances else {}
+    instance_id = first_instance.get("InstanceId")
+    if not instance_id:
+        raise RuntimeError(
+            f"AWS did not return an instance ID for instance type '{normalized_instance_type}' "
+            f"in region '{normalized_region}'."
+        )
+    return instance_id
+
+
 def get_ondemand_g_vcpu_quota(
     region: str = "us-east-1", service_quotas_client: Any = None
 ) -> int:
@@ -212,7 +290,9 @@ def get_ondemand_g_vcpu_quota(
                     )
                 return int(value)
 
-    raise RuntimeError(f"No EC2 On-Demand G/VT instance quota found in region {region}.")
+    raise RuntimeError(
+        f"No EC2 On-Demand G/VT instance quota found in region {region}."
+    )
 
 
 def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None) -> int:
@@ -240,7 +320,9 @@ def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None)
     ec2 = ec2_client or boto3.client("ec2", region_name=region)
 
     paginator = ec2.get_paginator("describe_instances")
-    pages = paginator.paginate(Filters=[{"Name": "instance-state-name", "Values": ["running"]}])
+    pages = paginator.paginate(
+        Filters=[{"Name": "instance-state-name", "Values": ["running"]}]
+    )
     instance_types = _extract_running_ondemand_g_instance_types(pages)
 
     if not instance_types:
