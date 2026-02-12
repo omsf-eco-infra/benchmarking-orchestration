@@ -24,6 +24,7 @@ boto3 = ">=1.42.46,<2"
 [tool.pixi.environments]
 default = { solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
+dev = { features = ["test", "dev"], solve-group = "default"}
 
 [tool.pixi.feature.test.dependencies]
 pytest-xdist = ">=3.8.0,<4"
@@ -32,3 +33,10 @@ moto = ">=5.1.21,<6"
 
 [tool.pixi.feature.test.tasks]
 test = "pytest -q -n auto"
+
+[tool.pixi.feature.dev.dependencies]
+ruff = "*"
+
+[tool.pixi.feature.dev.tasks]
+fmt = "ruff format"
+check = "ruff check"
