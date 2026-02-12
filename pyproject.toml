@@ -1,0 +1,31 @@
+[project]
+authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
+dependencies = []
+name = "benchmarking-orchestration"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-64", "osx-arm64", "linux-64", "linux-aarch64"]
+
+[tool.pixi.pypi-dependencies]
+benchmarking_orchestration = { path = ".", editable = true }
+exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
+
+[tool.pixi.tasks]
+
+[tool.pixi.dependencies]
+click = ">=8.3.1,<9"
+boto3 = ">=1.42.46,<2"
+
+[tool.pixi.feature.pixi.dependencies]
+pytest = ">=8.0.0,<9"
+moto = ">=5.0.0,<6"
+
+[tool.pixi.environments]
+pixi = ["pixi"]
