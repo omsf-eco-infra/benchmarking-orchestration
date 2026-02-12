@@ -115,7 +115,7 @@ def _resolve_worker_capabilities(launch_task: bool) -> list[str]:
         Enabled worker capability names.
     """
     if launch_task:
-        return ["launch-task"]
+        return ["ec2-launch"]
     return []
 
 
@@ -143,7 +143,8 @@ def cli(ctx: click.Context) -> None:
     show_default=True,
     type=bool,
 )
-def worker(launch_task: bool) -> None:
+@click.option("--db-path", default="task_status.db", show_default=True, type=str)
+def worker(launch_task: bool, db_path: str) -> None:
     """Run a worker with explicitly enabled task capabilities.
 
     Parameters
@@ -161,7 +162,16 @@ def worker(launch_task: bool) -> None:
         raise click.UsageError(
             "At least one worker capability must be enabled. Use --launch-task."
         )
-    click.echo(f"Worker capabilities: {','.join(capabilities)}")
+    normalized_db_path = _normalize_db_path(db_path)
+    cap = capabilities[0]
+    try:
+        task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
+        task = task_db.check_out_task_with_type(cap)
+        print(task)
+    except Exception as exc:
+        raise click.ClickException(
+            f"Unable to create task in database '{normalized_db_path}': {exc}"
+        ) from exc
 
 
 @cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")
