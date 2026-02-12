@@ -1,4 +1,4 @@
-from .aws import get_ondemand_g_vcpu_quota
+from . import cli
 
 if __name__ == "__main__":
-    get_ondemand_g_vcpu_quota()
+    cli()
