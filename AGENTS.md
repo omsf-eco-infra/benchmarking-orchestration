@@ -15,6 +15,12 @@ Practical guidance for coding agents working in this repository.
 - Run a single test file:
   - `pixi run test-aws`
 
+## Formatting
+- `pixi run fmt`
+
+## Linting
+- `pixi run check`
+
 ## AWS Runtime Notes
 - The quota query uses AWS `service-quotas` in `us-east-1` by default.
 - Ensure AWS credentials are available in the shell/session (`AWS_PROFILE`, env vars, or default credential chain).
@@ -32,6 +38,7 @@ Practical guidance for coding agents working in this repository.
 - Prefer defensive access patterns (`dict.get`) for AWS responses.
 - Preserve simple stdout output format unless explicitly changing UX/CLI behavior.
 - If expanding behavior (new instance families, region input, CLI args), keep backward compatibility with current default run command.
+- Always write numpy docstrings from all functions.
 
 ## Validation Before Hand-off
 - Re-run:
@@ -40,3 +47,4 @@ Practical guidance for coding agents working in this repository.
   - `pixi run test`
 - Confirm expected printed quotas for the target filter.
 - If behavior depends on account-specific quotas, call that out in the summary.
+- Ensure that all functions have proper documentation.
