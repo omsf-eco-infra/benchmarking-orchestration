@@ -1,5 +1,6 @@
 import boto3
 import pytest
+from botocore.exceptions import EndpointConnectionError
 from botocore.stub import Stubber
 from moto import mock_aws
 
@@ -10,6 +11,7 @@ from benchmarking_orchestration.aws import (
     _resolve_vcpus_by_instance_type,
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
+    validate_launch_instance_type,
 )
 
 
@@ -155,3 +157,35 @@ def test_get_ondemand_g_vcpus_used_raises_for_missing_instance_type_metadata(ec2
     client = _MissingInstanceTypeMetadataClient(ec2_client)
     with pytest.raises(RuntimeError, match="Unable to resolve vCPU counts"):
         get_ondemand_g_vcpus_used(ec2_client=client)
+
+
+def test_validate_launch_instance_type_accepts_valid_g_type(ec2_client):
+    validate_launch_instance_type("g5.xlarge", ec2_client=ec2_client)
+
+
+def test_validate_launch_instance_type_accepts_valid_vt_type(ec2_client):
+    validate_launch_instance_type("vt1.3xlarge", ec2_client=ec2_client)
+
+
+def test_validate_launch_instance_type_raises_for_empty_value(ec2_client):
+    with pytest.raises(ValueError, match="instance type cannot be empty"):
+        validate_launch_instance_type("   ", ec2_client=ec2_client)
+
+
+def test_validate_launch_instance_type_raises_for_non_g_vt_family(ec2_client):
+    with pytest.raises(ValueError, match="G/VT family"):
+        validate_launch_instance_type("c6a.large", ec2_client=ec2_client)
+
+
+def test_validate_launch_instance_type_raises_for_invalid_instance_type(ec2_client):
+    with pytest.raises(RuntimeError, match="Invalid or unavailable instance type"):
+        validate_launch_instance_type("g999.thisdoesnotexist", ec2_client=ec2_client)
+
+
+def test_validate_launch_instance_type_raises_for_boto_error():
+    class _BrokenEC2Client:
+        def describe_instance_types(self, InstanceTypes):
+            raise EndpointConnectionError(endpoint_url="https://ec2.us-east-1.amazonaws.com")
+
+    with pytest.raises(RuntimeError, match="AWS error while validating instance type"):
+        validate_launch_instance_type("g5.xlarge", ec2_client=_BrokenEC2Client())
