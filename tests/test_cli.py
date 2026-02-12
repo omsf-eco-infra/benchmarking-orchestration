@@ -50,13 +50,127 @@ def test_cli_no_args_shows_help_and_lists_worker():
     assert "quota" not in result.output.lower()
 
 
-def test_worker_with_launch_task_capability_exits_success():
+def test_worker_with_launch_task_capability_exits_success_when_no_tasks(monkeypatch):
     runner = CliRunner()
+    store = {"db_paths": [], "checkout_caps": []}
 
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            store["db_paths"].append(filename)
+            return cls()
+
+        def check_out_task_with_type(self, task_type):
+            store["checkout_caps"].append(task_type)
+            return None
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
     result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
 
     assert result.exit_code == 0
-    assert "Worker capabilities: launch-task" in result.output
+    assert store["db_paths"] == [Path("task_status.db")]
+    assert store["checkout_caps"] == ["ec2-launch"]
+    assert "No available ec2-launch tasks." in result.output
+
+
+def test_worker_launches_task_and_marks_success(monkeypatch):
+    runner = CliRunner()
+    taskid = "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+    store = {
+        "db_paths": [],
+        "checkout_caps": [],
+        "mark_calls": [],
+        "launch_calls": [],
+    }
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            store["db_paths"].append(filename)
+            return cls()
+
+        def check_out_task_with_type(self, task_type):
+            store["checkout_caps"].append(task_type)
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_launch_ec2_instance(instance_type, region):
+        store["launch_calls"].append({"instance_type": instance_type, "region": region})
+        return "i-1234567890abcdef0"
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
+    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+
+    assert result.exit_code == 0
+    assert store["db_paths"] == [Path("task_status.db")]
+    assert store["checkout_caps"] == ["ec2-launch"]
+    assert store["launch_calls"] == [{"instance_type": "g5.xlarge", "region": "us-east-1"}]
+    assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
+    assert "Processed launch task" in result.output
+
+
+def test_worker_marks_failure_when_launch_raises(monkeypatch):
+    runner = CliRunner()
+    taskid = "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_type(self, task_type):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(
+        cli_module,
+        "launch_ec2_instance",
+        lambda instance_type, region: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+
+    assert result.exit_code != 0
+    assert "Failed to process launch task" in result.output
+    assert "boom" in result.output
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
+
+
+def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
+    runner = CliRunner()
+    taskid = "bad-task-id"
+    store = {"mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_type(self, task_type):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(
+        cli_module,
+        "launch_ec2_instance",
+        lambda instance_type, region: (_ for _ in ()).throw(
+            AssertionError("launch helper should not be called for malformed task ID")
+        ),
+    )
+    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+
+    assert result.exit_code != 0
+    assert "Invalid launch task ID format" in result.output
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
 
 
 def test_worker_without_capabilities_fails():

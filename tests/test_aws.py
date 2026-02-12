@@ -11,6 +11,7 @@ from benchmarking_orchestration.aws import (
     _resolve_vcpus_by_instance_type,
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
+    launch_ec2_instance,
     validate_launch_instance_type,
 )
 
@@ -56,6 +57,16 @@ class _MissingInstanceTypeMetadataClient:
 
     def describe_instance_types(self, InstanceTypes):
         return {"InstanceTypes": []}
+
+
+class _BrokenLaunchEC2Client:
+    def run_instances(self, **kwargs):
+        raise EndpointConnectionError(endpoint_url="https://ec2.us-east-1.amazonaws.com")
+
+
+class _MissingInstanceIdEC2Client:
+    def run_instances(self, **kwargs):
+        return {"Instances": [{}]}
 
 
 def test_quota_name_match():
@@ -189,3 +200,29 @@ def test_validate_launch_instance_type_raises_for_boto_error():
 
     with pytest.raises(RuntimeError, match="AWS error while validating instance type"):
         validate_launch_instance_type("g5.xlarge", ec2_client=_BrokenEC2Client())
+
+
+def test_launch_ec2_instance_returns_instance_id(ec2_client):
+    instance_id = launch_ec2_instance("G5.XLARGE", ec2_client=ec2_client)
+    assert isinstance(instance_id, str)
+    assert instance_id.startswith("i-")
+
+
+def test_launch_ec2_instance_raises_for_empty_instance_type(ec2_client):
+    with pytest.raises(ValueError, match="instance type cannot be empty"):
+        launch_ec2_instance("   ", ec2_client=ec2_client)
+
+
+def test_launch_ec2_instance_raises_for_region_outside_fixed_ami(ec2_client):
+    with pytest.raises(RuntimeError, match="only supported in region 'us-east-1'"):
+        launch_ec2_instance("g5.xlarge", region="us-west-2", ec2_client=ec2_client)
+
+
+def test_launch_ec2_instance_raises_for_boto_error():
+    with pytest.raises(RuntimeError, match="AWS error while launching instance type"):
+        launch_ec2_instance("g5.xlarge", ec2_client=_BrokenLaunchEC2Client())
+
+
+def test_launch_ec2_instance_raises_for_missing_instance_id():
+    with pytest.raises(RuntimeError, match="did not return an instance ID"):
+        launch_ec2_instance("g5.xlarge", ec2_client=_MissingInstanceIdEC2Client())
