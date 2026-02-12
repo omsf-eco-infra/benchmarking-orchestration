@@ -17,17 +17,18 @@ platforms = ["osx-64", "osx-arm64", "linux-64", "linux-aarch64"]
 benchmarking_orchestration = { path = ".", editable = true }
 exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 
-[tool.pixi.tasks]
-test = { cmd = "pytest -q", default-environment = "pixi" }
-test-aws = { cmd = "pytest tests/test_aws.py -q", default-environment = "pixi" }
-
 [tool.pixi.dependencies]
 click = ">=8.3.1,<9"
 boto3 = ">=1.42.46,<2"
 
-[tool.pixi.feature.pixi.dependencies]
-pytest = ">=8.0.0,<9"
-moto = ">=5.0.0,<6"
-
 [tool.pixi.environments]
-pixi = ["pixi"]
+default = { solve-group = "default" }
+test = { features = ["test"], solve-group = "default" }
+
+[tool.pixi.feature.test.dependencies]
+pytest = "*"
+moto = "*"
+pytest-xdist = ">=3.8.0,<4"
+
+[tool.pixi.feature.test.tasks]
+test = "pytest -q -n auto"
