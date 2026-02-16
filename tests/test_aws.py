@@ -213,9 +213,9 @@ def test_launch_ec2_instance_raises_for_empty_instance_type(ec2_client):
         launch_ec2_instance("   ", ec2_client=ec2_client)
 
 
-def test_launch_ec2_instance_raises_for_region_outside_fixed_ami(ec2_client):
-    with pytest.raises(RuntimeError, match="only supported in region 'us-east-1'"):
-        launch_ec2_instance("g5.xlarge", region="us-west-2", ec2_client=ec2_client)
+def test_launch_ec2_instance_raises_for_empty_ami_id(ec2_client):
+    with pytest.raises(ValueError, match="ami id cannot be empty"):
+        launch_ec2_instance("g5.xlarge", ami_id="   ", ec2_client=ec2_client)
 
 
 def test_launch_ec2_instance_raises_for_boto_error():

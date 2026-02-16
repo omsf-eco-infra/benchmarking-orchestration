@@ -75,7 +75,10 @@ def test_worker_with_launch_task_capability_exits_success_when_no_tasks(monkeypa
 
 def test_worker_launches_task_and_marks_success(monkeypatch):
     runner = CliRunner()
-    taskid = "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
+        "12345678-1234-5678-1234-567812345678"
+    )
     store = {
         "db_paths": [],
         "checkout_caps": [],
@@ -96,8 +99,10 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
         def mark_task_completed(self, taskid_value, success):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
-    def _fake_launch_ec2_instance(instance_type, region):
-        store["launch_calls"].append({"instance_type": instance_type, "region": region})
+    def _fake_launch_ec2_instance(instance_type, ami_id, region):
+        store["launch_calls"].append(
+            {"instance_type": instance_type, "ami_id": ami_id, "region": region}
+        )
         return "i-1234567890abcdef0"
 
     monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
@@ -107,14 +112,23 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
     assert result.exit_code == 0
     assert store["db_paths"] == [Path("task_status.db")]
     assert store["checkout_caps"] == ["ec2-launch"]
-    assert store["launch_calls"] == [{"instance_type": "g5.xlarge", "region": "us-east-1"}]
+    assert store["launch_calls"] == [
+        {
+            "instance_type": "g5.xlarge",
+            "ami_id": "ami-0abc123456789def0",
+            "region": "us-east-1",
+        }
+    ]
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
     assert "Processed launch task" in result.output
 
 
 def test_worker_marks_failure_when_launch_raises(monkeypatch):
     runner = CliRunner()
-    taskid = "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
+        "12345678-1234-5678-1234-567812345678"
+    )
     store = {"mark_calls": []}
 
     class _FakeTaskStatusDB:
@@ -132,7 +146,7 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, region: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda instance_type, ami_id, region: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
 
@@ -162,7 +176,7 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, region: (_ for _ in ()).throw(
+        lambda instance_type, ami_id, region: (_ for _ in ()).throw(
             AssertionError("launch helper should not be called for malformed task ID")
         ),
     )
@@ -171,6 +185,44 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
     assert result.exit_code != 0
     assert "Invalid launch task ID format" in result.output
     assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
+
+
+def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
+    runner = CliRunner()
+    taskid = "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+    store = {"launch_calls": [], "mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_type(self, task_type):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_launch_ec2_instance(instance_type, ami_id, region):
+        store["launch_calls"].append(
+            {"instance_type": instance_type, "ami_id": ami_id, "region": region}
+        )
+        return "i-1234567890abcdef0"
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
+
+    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+
+    assert result.exit_code == 0
+    assert store["launch_calls"] == [
+        {
+            "instance_type": "g5.xlarge",
+            "ami_id": aws_module.DEFAULT_LAUNCH_AMI_ID,
+            "region": "us-east-1",
+        }
+    ]
+    assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
 
 
 def test_worker_without_capabilities_fails():
@@ -226,9 +278,15 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
         assert created["requirements"] == []
         assert created["max_tries"] == 1
         assert created["task_type"] == "ec2-launch"
-        assert created["taskid"] == "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
         assert (
-            "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+            created["taskid"] == "us-east-1:g5.xlarge:"
+            f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+            "12345678-1234-5678-1234-567812345678"
+        )
+        assert (
+            "us-east-1:g5.xlarge:"
+            f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+            "12345678-1234-5678-1234-567812345678"
             in result.output
         )
 
@@ -330,7 +388,49 @@ def test_create_launch_task_region_override_is_used(monkeypatch):
         created = store["tasks"][0]
         assert created["max_tries"] == 3
         assert created["task_type"] == "ec2-launch"
-        assert created["taskid"].startswith("us-west-2:vt1.3xlarge:")
+        assert created["taskid"].startswith(
+            f"us-west-2:vt1.3xlarge:{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+        )
+
+
+def test_create_launch_task_ami_override_is_used(monkeypatch):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    real_boto3_client = boto3.client
+
+    with mock_aws():
+        monkeypatch.setattr(
+            aws_module.boto3,
+            "client",
+            lambda service_name, region_name: real_boto3_client(
+                service_name, region_name=region_name
+            ),
+        )
+        monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+        monkeypatch.setattr(
+            cli_module.uuid,
+            "uuid4",
+            lambda: uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        )
+
+        result = runner.invoke(
+            cli_module.cli,
+            [
+                "create-launch-task",
+                "--instance-type",
+                "g5.xlarge",
+                "--ami-id",
+                "ami-0abc123456789def0",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert len(store["tasks"]) == 1
+        assert (
+            store["tasks"][0]["taskid"]
+            == "us-east-1:g5.xlarge:ami-0abc123456789def0:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        )
+        assert "with AMI 'ami-0abc123456789def0'" in result.output
 
 
 def test_create_launch_task_re_raises_validation_error_as_click_exception(monkeypatch):
