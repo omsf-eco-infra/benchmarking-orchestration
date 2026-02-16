@@ -3,8 +3,7 @@ from typing import Any, Iterable
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-DEFAULT_LAUNCH_AMI_ID = "ami-07c50216126e6c761"
-DEFAULT_LAUNCH_AMI_REGION = "us-east-1"
+DEFAULT_LAUNCH_AMI_ID = "ami-0ec16471888b25545"
 
 
 def _is_ondemand_g_quota_name(name: str) -> bool:
@@ -179,7 +178,10 @@ def validate_launch_instance_type(
 
 
 def launch_ec2_instance(
-    instance_type: str, region: str = "us-east-1", ec2_client: Any = None
+    instance_type: str,
+    ami_id: str = DEFAULT_LAUNCH_AMI_ID,
+    region: str = "us-east-1",
+    ec2_client: Any = None,
 ) -> str:
     """Launch a single EC2 instance and return its instance ID.
 
@@ -187,6 +189,8 @@ def launch_ec2_instance(
     ----------
     instance_type : str
         EC2 instance type identifier to launch.
+    ami_id : str, default=DEFAULT_LAUNCH_AMI_ID
+        AMI identifier to launch.
     region : str, default="us-east-1"
         AWS region where the launch should occur.
     ec2_client : Any, optional
@@ -203,27 +207,25 @@ def launch_ec2_instance(
     ValueError
         If required inputs are empty.
     RuntimeError
-        If region policy is violated, AWS launch fails, or response data
-        does not include an instance identifier.
+        If AWS launch fails or response data does not include an
+        instance identifier.
     """
     normalized_instance_type = instance_type.strip().lower()
     if not normalized_instance_type:
         raise ValueError("instance type cannot be empty.")
 
+    normalized_ami_id = ami_id.strip().lower()
+    if not normalized_ami_id:
+        raise ValueError("ami id cannot be empty.")
+
     normalized_region = region.strip()
     if not normalized_region:
         raise ValueError("region cannot be empty.")
 
-    if normalized_region != DEFAULT_LAUNCH_AMI_REGION:
-        raise RuntimeError(
-            f"Launching with fixed AMI '{DEFAULT_LAUNCH_AMI_ID}' is only supported in "
-            f"region '{DEFAULT_LAUNCH_AMI_REGION}', received '{normalized_region}'."
-        )
-
     ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
     try:
         response = ec2.run_instances(
-            ImageId=DEFAULT_LAUNCH_AMI_ID,
+            ImageId=normalized_ami_id,
             InstanceType=normalized_instance_type,
             MinCount=1,
             MaxCount=1,
@@ -234,12 +236,12 @@ def launch_ec2_instance(
         message = error.get("Message", str(exc))
         raise RuntimeError(
             f"AWS error while launching instance type '{normalized_instance_type}' "
-            f"in region '{normalized_region}': {code or message}"
+            f"with AMI '{normalized_ami_id}' in region '{normalized_region}': {code or message}"
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
             f"AWS error while launching instance type '{normalized_instance_type}' "
-            f"in region '{normalized_region}': {exc}"
+            f"with AMI '{normalized_ami_id}' in region '{normalized_region}': {exc}"
         ) from exc
 
     instances = response.get("Instances", [])
@@ -248,7 +250,7 @@ def launch_ec2_instance(
     if not instance_id:
         raise RuntimeError(
             f"AWS did not return an instance ID for instance type '{normalized_instance_type}' "
-            f"in region '{normalized_region}'."
+            f"with AMI '{normalized_ami_id}' in region '{normalized_region}'."
         )
     return instance_id
 

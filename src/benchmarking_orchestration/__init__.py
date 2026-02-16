@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 from .tasks import TaskStatusDB
 
-from .aws import launch_ec2_instance, validate_launch_instance_type
+from .aws import DEFAULT_LAUNCH_AMI_ID, launch_ec2_instance, validate_launch_instance_type
 
 
 def _normalize_required_value(field_name: str, value: str) -> str:
@@ -83,7 +83,11 @@ def _normalize_db_path(db_path: str) -> str:
     return _normalize_required_value("db path", db_path)
 
 
-def _build_task_id(region: str, instance_type: str) -> str:
+def _build_task_id(
+    region: str,
+    instance_type: str,
+    ami_id: str = DEFAULT_LAUNCH_AMI_ID,
+) -> str:
     """Build a unique task identifier for EC2 launch orchestration.
 
     Parameters
@@ -92,55 +96,92 @@ def _build_task_id(region: str, instance_type: str) -> str:
         AWS region where the launch should occur.
     instance_type : str
         Validated EC2 instance type.
+    ami_id : str, default=DEFAULT_LAUNCH_AMI_ID
+        AMI identifier to use for launch.
 
     Returns
     -------
     str
-        Task identifier in ``<region>:<instance_type>:<uuid4>`` format.
+        Task identifier in ``<region>:<instance_type>:<ami_id>:<uuid4>`` format.
     """
-    return f"{region}:{instance_type}:{uuid.uuid4()}"
+    return f"{region}:{instance_type}:{ami_id}:{uuid.uuid4()}"
 
 
-def _parse_launch_task_id(taskid: str) -> tuple[str, str]:
+def _normalize_ami_id(ami_id: str) -> str:
+    """Normalize and lowercase an AMI identifier value.
+
+    Parameters
+    ----------
+    ami_id : str
+        Raw AMI identifier argument from the CLI.
+
+    Returns
+    -------
+    str
+        Lowercased, stripped AMI identifier.
+    """
+    return _normalize_required_value("ami id", ami_id).lower()
+
+
+def _parse_launch_task_id(taskid: str) -> tuple[str, str, str]:
     """Parse a launch task identifier into region and instance type.
 
     Parameters
     ----------
     taskid : str
-        Task identifier in ``<region>:<instance_type>:<uuid4>`` format.
+        Task identifier in
+        ``<region>:<instance_type>:<ami_id>:<uuid4>`` format. Legacy
+        ``<region>:<instance_type>:<uuid4>`` format is also accepted.
 
     Returns
     -------
-    tuple[str, str]
-        Parsed ``(region, instance_type)`` values.
+    tuple[str, str, str]
+        Parsed ``(region, instance_type, ami_id)`` values.
 
     Raises
     ------
     ValueError
         If the task identifier is malformed or missing required parts.
     """
-    try:
-        region, instance_type, task_uuid = taskid.split(":", maxsplit=2)
-    except ValueError as exc:
+    parts = taskid.split(":")
+    if len(parts) == 3:
+        region, instance_type, task_uuid = parts
+        ami_id = DEFAULT_LAUNCH_AMI_ID
+    elif len(parts) == 4:
+        region, instance_type, ami_id, task_uuid = parts
+    else:
         raise ValueError(
-            "Invalid launch task ID format. Expected '<region>:<instance_type>:<uuid4>'."
-        ) from exc
+            "Invalid launch task ID format. Expected "
+            "'<region>:<instance_type>:<ami_id>:<uuid4>' or "
+            "'<region>:<instance_type>:<uuid4>'."
+        )
 
     normalized_region = region.strip()
     normalized_instance_type = instance_type.strip().lower()
-    if not normalized_region or not normalized_instance_type or not task_uuid.strip():
+    normalized_ami_id = ami_id.strip().lower()
+    normalized_task_uuid = task_uuid.strip()
+    if (
+        not normalized_region
+        or not normalized_instance_type
+        or not normalized_ami_id
+        or not normalized_task_uuid
+    ):
         raise ValueError(
-            "Invalid launch task ID format. Expected '<region>:<instance_type>:<uuid4>'."
+            "Invalid launch task ID format. Expected "
+            "'<region>:<instance_type>:<ami_id>:<uuid4>' or "
+            "'<region>:<instance_type>:<uuid4>'."
         )
 
     try:
-        uuid.UUID(task_uuid.strip())
+        uuid.UUID(normalized_task_uuid)
     except ValueError as exc:
         raise ValueError(
-            "Invalid launch task ID format. Expected '<region>:<instance_type>:<uuid4>'."
+            "Invalid launch task ID format. Expected "
+            "'<region>:<instance_type>:<ami_id>:<uuid4>' or "
+            "'<region>:<instance_type>:<uuid4>'."
         ) from exc
 
-    return normalized_region, normalized_instance_type
+    return normalized_region, normalized_instance_type, normalized_ami_id
 
 
 def _resolve_worker_capabilities(launch_task: bool) -> list[str]:
@@ -219,8 +260,10 @@ def worker(launch_task: bool, db_path: str) -> None:
         return
 
     try:
-        task_region, task_instance_type = _parse_launch_task_id(task)
-        instance_id = launch_ec2_instance(task_instance_type, region=task_region)
+        task_region, task_instance_type, task_ami_id = _parse_launch_task_id(task)
+        instance_id = launch_ec2_instance(
+            task_instance_type, ami_id=task_ami_id, region=task_region
+        )
     except Exception as exc:
         try:
             task_db.mark_task_completed(task, success=False)
@@ -245,11 +288,15 @@ def worker(launch_task: bool, db_path: str) -> None:
 @cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")
 @click.option("--instance-type", required=True, type=str)
 @click.option("--region", default="us-east-1", show_default=True, type=str)
+@click.option(
+    "--ami-id", default=DEFAULT_LAUNCH_AMI_ID, show_default=True, type=str
+)
 @click.option("--db-path", default="task_status.db", show_default=True, type=str)
 @click.option("--max-tries", default=1, show_default=True, type=click.IntRange(min=1))
 def create_launch_task(
     instance_type: str,
     region: str,
+    ami_id: str,
     db_path: str,
     max_tries: int,
 ) -> None:
@@ -261,6 +308,8 @@ def create_launch_task(
         Requested EC2 instance type to validate and schedule.
     region : str
         AWS region used for instance-type validation and task identity.
+    ami_id : str
+        AMI identifier recorded with task launch metadata.
     db_path : str
         Filesystem path to the task status database.
     max_tries : int
@@ -273,6 +322,7 @@ def create_launch_task(
     """
     normalized_instance_type = _normalize_instance_type(instance_type)
     normalized_region = _normalize_region(region)
+    normalized_ami_id = _normalize_ami_id(ami_id)
     normalized_db_path = _normalize_db_path(db_path)
 
     try:
@@ -280,7 +330,7 @@ def create_launch_task(
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
-    task_id = _build_task_id(normalized_region, normalized_instance_type)
+    task_id = _build_task_id(normalized_region, normalized_instance_type, normalized_ami_id)
 
     try:
         task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
@@ -295,5 +345,6 @@ def create_launch_task(
 
     click.echo(task_id)
     click.echo(
-        f"Created launch task for instance type '{normalized_instance_type}' in region '{normalized_region}'."
+        f"Created launch task for instance type '{normalized_instance_type}' with AMI "
+        f"'{normalized_ami_id}' in region '{normalized_region}'."
     )
