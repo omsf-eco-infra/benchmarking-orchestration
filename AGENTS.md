@@ -11,9 +11,7 @@ Practical guidance for coding agents working in this repository.
 
 ## Testing
 - Run the full unit test suite:
-  - `pixi run test`
-- Run a single test file:
-  - `pixi run test-aws`
+  - `pixi run --environment dev test`
 
 ## Formatting
 - `pixi run fmt`
