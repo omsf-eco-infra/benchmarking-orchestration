@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from enum import StrEnum
 from pathlib import Path
 
 import click
@@ -12,6 +13,23 @@ from .aws import (
     validate_launch_ami,
     validate_launch_instance_type,
 )
+
+
+class WorkerCapability(StrEnum):
+    """Supported worker capability names."""
+
+    LAUNCH = "launch"
+
+
+def _worker_capability_choices() -> tuple[str, ...]:
+    """Return supported worker capability values for CLI option choices.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted capability values accepted by the CLI.
+    """
+    return tuple(sorted(capability.value for capability in WorkerCapability))
 
 
 def _normalize_required_value(field_name: str, value: str) -> str:
@@ -189,22 +207,26 @@ def _parse_launch_task_id(taskid: str) -> tuple[str, str, str]:
     return normalized_region, normalized_instance_type, normalized_ami_id
 
 
-def _resolve_worker_capabilities(launch_task: bool) -> list[str]:
-    """Resolve enabled worker capabilities from CLI flags.
+def _parse_worker_capability(
+    _ctx: click.Context, _param: click.Parameter, value: str
+) -> WorkerCapability:
+    """Parse and normalize worker capability option value.
 
     Parameters
     ----------
-    launch_task : bool
-        Whether launch-task handling is enabled for this worker instance.
+    _ctx : click.Context
+        Click context (unused).
+    _param : click.Parameter
+        Click parameter metadata (unused).
+    value : str
+        Selected worker capability value.
 
     Returns
     -------
-    list[str]
-        Enabled worker capability names.
+    WorkerCapability
+        Parsed worker capability enum value.
     """
-    if launch_task:
-        return ["ec2-launch"]
-    return []
+    return WorkerCapability(value.lower())
 
 
 @click.group(
@@ -224,44 +246,34 @@ def cli(ctx: click.Context) -> None:
         click.echo(ctx.get_help())
 
 
-@cli.command("worker", help="Run worker tasks based on enabled capabilities.")
+@cli.command("worker", help="Run worker tasks for a selected capability.")
 @click.option(
-    "--launch-task/--no-launch-task",
-    default=False,
-    show_default=True,
-    type=bool,
+    "--capability",
+    required=True,
+    type=click.Choice(_worker_capability_choices(), case_sensitive=False),
+    callback=_parse_worker_capability,
+    help="Worker capability to execute.",
 )
 @click.option("--db-path", default="task_status.db", show_default=True, type=str)
-def worker(launch_task: bool, db_path: str) -> None:
-    """Run a worker with explicitly enabled task capabilities.
+def worker(capability: WorkerCapability, db_path: str) -> None:
+    """Run a worker with a selected capability.
 
     Parameters
     ----------
-    launch_task : bool
-        Whether the worker can run launch tasks.
-
-    Raises
-    ------
-    click.UsageError
-        If no worker capability is enabled.
+    capability : WorkerCapability
+        Worker capability used to select which tasks to process.
     """
-    capabilities = _resolve_worker_capabilities(launch_task=launch_task)
-    if not capabilities:
-        raise click.UsageError(
-            "At least one worker capability must be enabled. Use --launch-task."
-        )
     normalized_db_path = _normalize_db_path(db_path)
-    cap = capabilities[0]
     try:
         task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
-        task = task_db.check_out_task_with_type(cap)
+        task = task_db.check_out_task_with_capability(capability.value)
     except Exception as exc:
         raise click.ClickException(
             f"Unable to check out task from database '{normalized_db_path}': {exc}"
         ) from exc
 
     if task is None:
-        click.echo("No available ec2-launch tasks.")
+        click.echo(f"No available {capability.value} tasks.")
         return
 
     try:
@@ -342,8 +354,11 @@ def create_launch_task(
 
     try:
         task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
-        task_db.add_task_with_type(
-            taskid=task_id, requirements=[], max_tries=max_tries, task_type="ec2-launch"
+        task_db.add_task_with_capability(
+            taskid=task_id,
+            requirements=[],
+            max_tries=max_tries,
+            capability=WorkerCapability.LAUNCH.value,
         )
         # task_db.add_task(taskid=task_id, requirements=[], max_tries=max_tries)
     except Exception as exc:
