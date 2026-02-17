@@ -1,6 +1,6 @@
 import boto3
 import pytest
-from botocore.exceptions import EndpointConnectionError
+from botocore.exceptions import EndpointConnectionError, WaiterError
 from botocore.stub import Stubber
 from moto import mock_aws
 
@@ -12,6 +12,7 @@ from benchmarking_orchestration.aws import (
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
     launch_ec2_instance,
+    validate_launch_ami,
     validate_launch_instance_type,
 )
 
@@ -61,12 +62,31 @@ class _MissingInstanceTypeMetadataClient:
 
 class _BrokenLaunchEC2Client:
     def run_instances(self, **kwargs):
-        raise EndpointConnectionError(endpoint_url="https://ec2.us-east-1.amazonaws.com")
+        raise EndpointConnectionError(
+            endpoint_url="https://ec2.us-east-1.amazonaws.com"
+        )
 
 
 class _MissingInstanceIdEC2Client:
     def run_instances(self, **kwargs):
         return {"Instances": [{}]}
+
+
+class _WaiterFailureEC2Client:
+    class _Waiter:
+        def wait(self, **kwargs):
+            raise WaiterError(
+                name="instance_running",
+                reason="Max attempts exceeded",
+                last_response={},
+            )
+
+    def run_instances(self, **kwargs):
+        return {"Instances": [{"InstanceId": "i-1234567890abcdef0"}]}
+
+    def get_waiter(self, waiter_name):
+        assert waiter_name == "instance_running"
+        return self._Waiter()
 
 
 def test_quota_name_match():
@@ -97,7 +117,10 @@ def test_extract_running_ondemand_g_instance_types():
             ]
         }
     ]
-    assert _extract_running_ondemand_g_instance_types(pages) == ["g5.xlarge", "vt1.3xlarge"]
+    assert _extract_running_ondemand_g_instance_types(pages) == [
+        "g5.xlarge",
+        "vt1.3xlarge",
+    ]
 
 
 def test_get_ondemand_g_vcpu_quota_returns_int(service_quotas_client):
@@ -106,23 +129,40 @@ def test_get_ondemand_g_vcpu_quota_returns_int(service_quotas_client):
             "list_service_quotas",
             {
                 "Quotas": [
-                    {"QuotaName": "Running On-Demand Standard instances", "Value": 256.0},
-                    {"QuotaName": "Running On-Demand G and VT instances", "Value": 16.0},
+                    {
+                        "QuotaName": "Running On-Demand Standard instances",
+                        "Value": 256.0,
+                    },
+                    {
+                        "QuotaName": "Running On-Demand G and VT instances",
+                        "Value": 16.0,
+                    },
                 ]
             },
             {"ServiceCode": "ec2"},
         )
-        assert get_ondemand_g_vcpu_quota(service_quotas_client=service_quotas_client) == 16
+        assert (
+            get_ondemand_g_vcpu_quota(service_quotas_client=service_quotas_client) == 16
+        )
 
 
 def test_get_ondemand_g_vcpu_quota_raises_when_missing(service_quotas_client):
     with Stubber(service_quotas_client) as stubber:
         stubber.add_response(
             "list_service_quotas",
-            {"Quotas": [{"QuotaName": "Running On-Demand Standard instances", "Value": 256.0}]},
+            {
+                "Quotas": [
+                    {
+                        "QuotaName": "Running On-Demand Standard instances",
+                        "Value": 256.0,
+                    }
+                ]
+            },
             {"ServiceCode": "ec2"},
         )
-        with pytest.raises(RuntimeError, match="No EC2 On-Demand G/VT instance quota found"):
+        with pytest.raises(
+            RuntimeError, match="No EC2 On-Demand G/VT instance quota found"
+        ):
             get_ondemand_g_vcpu_quota(service_quotas_client=service_quotas_client)
 
 
@@ -138,7 +178,9 @@ def test_get_ondemand_g_vcpu_quota_raises_when_value_is_missing(service_quotas_c
 
 
 def test_resolve_vcpus_by_instance_type(ec2_client):
-    result = _resolve_vcpus_by_instance_type(ec2_client, ["g5.xlarge", "g4dn.xlarge", "g5.xlarge"])
+    result = _resolve_vcpus_by_instance_type(
+        ec2_client, ["g5.xlarge", "g4dn.xlarge", "g5.xlarge"]
+    )
     assert result["g5.xlarge"] > 0
     assert result["g4dn.xlarge"] > 0
 
@@ -152,7 +194,10 @@ def test_get_ondemand_g_vcpus_used_returns_int(ec2_client):
     instance_types = ec2_client.describe_instance_types(
         InstanceTypes=["g5.xlarge", "vt1.3xlarge"]
     )["InstanceTypes"]
-    vcpus = {item["InstanceType"]: item["VCpuInfo"]["DefaultVCpus"] for item in instance_types}
+    vcpus = {
+        item["InstanceType"]: item["VCpuInfo"]["DefaultVCpus"]
+        for item in instance_types
+    }
     expected = (2 * vcpus["g5.xlarge"]) + vcpus["vt1.3xlarge"]
 
     assert get_ondemand_g_vcpus_used(ec2_client=ec2_client) == expected
@@ -163,7 +208,9 @@ def test_get_ondemand_g_vcpus_used_returns_zero_when_no_matching_instances(ec2_c
     assert get_ondemand_g_vcpus_used(ec2_client=ec2_client) == 0
 
 
-def test_get_ondemand_g_vcpus_used_raises_for_missing_instance_type_metadata(ec2_client):
+def test_get_ondemand_g_vcpus_used_raises_for_missing_instance_type_metadata(
+    ec2_client,
+):
     _run_instance(ec2_client, "g5.xlarge", count=1)
     client = _MissingInstanceTypeMetadataClient(ec2_client)
     with pytest.raises(RuntimeError, match="Unable to resolve vCPU counts"):
@@ -196,10 +243,53 @@ def test_validate_launch_instance_type_raises_for_invalid_instance_type(ec2_clie
 def test_validate_launch_instance_type_raises_for_boto_error():
     class _BrokenEC2Client:
         def describe_instance_types(self, InstanceTypes):
-            raise EndpointConnectionError(endpoint_url="https://ec2.us-east-1.amazonaws.com")
+            raise EndpointConnectionError(
+                endpoint_url="https://ec2.us-east-1.amazonaws.com"
+            )
 
     with pytest.raises(RuntimeError, match="AWS error while validating instance type"):
         validate_launch_instance_type("g5.xlarge", ec2_client=_BrokenEC2Client())
+
+
+def test_validate_launch_ami_accepts_available_image():
+    ec2_client = boto3.client("ec2", region_name="us-east-1")
+    with Stubber(ec2_client) as stubber:
+        stubber.add_response(
+            "describe_images",
+            {"Images": [{"ImageId": "ami-0ec16471888b25545", "State": "available"}]},
+            {"ImageIds": ["ami-0ec16471888b25545"]},
+        )
+        validate_launch_ami("ami-0ec16471888b25545", ec2_client=ec2_client)
+
+
+def test_validate_launch_ami_raises_for_empty_ami_id():
+    with pytest.raises(ValueError, match="ami id cannot be empty"):
+        validate_launch_ami("   ")
+
+
+def test_validate_launch_ami_raises_for_missing_image():
+    ec2_client = boto3.client("ec2", region_name="us-east-1")
+    with Stubber(ec2_client) as stubber:
+        stubber.add_client_error(
+            "describe_images",
+            service_error_code="InvalidAMIID.NotFound",
+            service_message="The image id does not exist",
+            expected_params={"ImageIds": ["ami-0doesnotexist0000"]},
+        )
+        with pytest.raises(RuntimeError, match="is unavailable in region"):
+            validate_launch_ami("ami-0doesnotexist0000", ec2_client=ec2_client)
+
+
+def test_validate_launch_ami_raises_for_non_available_state():
+    ec2_client = boto3.client("ec2", region_name="us-east-1")
+    with Stubber(ec2_client) as stubber:
+        stubber.add_response(
+            "describe_images",
+            {"Images": [{"ImageId": "ami-0ec16471888b25545", "State": "pending"}]},
+            {"ImageIds": ["ami-0ec16471888b25545"]},
+        )
+        with pytest.raises(RuntimeError, match="is unavailable in region"):
+            validate_launch_ami("ami-0ec16471888b25545", ec2_client=ec2_client)
 
 
 def test_launch_ec2_instance_returns_instance_id(ec2_client):
@@ -226,3 +316,8 @@ def test_launch_ec2_instance_raises_for_boto_error():
 def test_launch_ec2_instance_raises_for_missing_instance_id():
     with pytest.raises(RuntimeError, match="did not return an instance ID"):
         launch_ec2_instance("g5.xlarge", ec2_client=_MissingInstanceIdEC2Client())
+
+
+def test_launch_ec2_instance_raises_when_instance_never_reaches_running():
+    with pytest.raises(RuntimeError, match="did not reach running state"):
+        launch_ec2_instance("g5.xlarge", ec2_client=_WaiterFailureEC2Client())

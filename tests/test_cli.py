@@ -1,5 +1,6 @@
 import uuid
 from pathlib import Path
+import re
 
 import boto3
 import pytest
@@ -17,6 +18,10 @@ def _aws_credentials(monkeypatch):
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+def _stub_ami_validation(monkeypatch):
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
 
 
 def _build_fake_task_db(store):
@@ -76,8 +81,7 @@ def test_worker_with_launch_task_capability_exits_success_when_no_tasks(monkeypa
 def test_worker_launches_task_and_marks_success(monkeypatch):
     runner = CliRunner()
     taskid = (
-        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
-        "12345678-1234-5678-1234-567812345678"
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     )
     store = {
         "db_paths": [],
@@ -126,8 +130,7 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
 def test_worker_marks_failure_when_launch_raises(monkeypatch):
     runner = CliRunner()
     taskid = (
-        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
-        "12345678-1234-5678-1234-567812345678"
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     )
     store = {"mark_calls": []}
 
@@ -146,7 +149,9 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda instance_type, ami_id, region: (_ for _ in ()).throw(
+            RuntimeError("boom")
+        ),
     )
     result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
 
@@ -231,7 +236,10 @@ def test_worker_without_capabilities_fails():
     result = runner.invoke(cli_module.cli, ["worker"])
 
     assert result.exit_code != 0
-    assert "At least one worker capability must be enabled. Use --launch-task." in result.output
+    assert (
+        "At least one worker capability must be enabled. Use --launch-task."
+        in result.output
+    )
 
 
 def test_worker_explicit_no_launch_task_fails():
@@ -240,7 +248,10 @@ def test_worker_explicit_no_launch_task_fails():
     result = runner.invoke(cli_module.cli, ["worker", "--no-launch-task"])
 
     assert result.exit_code != 0
-    assert "At least one worker capability must be enabled. Use --launch-task." in result.output
+    assert (
+        "At least one worker capability must be enabled. Use --launch-task."
+        in result.output
+    )
 
 
 def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
@@ -248,6 +259,8 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
     store = {"db_paths": [], "tasks": []}
     boto3_calls = []
     real_boto3_client = boto3.client
+
+    _stub_ami_validation(monkeypatch)
 
     with mock_aws():
 
@@ -286,8 +299,7 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
         assert (
             "us-east-1:g5.xlarge:"
             f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
-            "12345678-1234-5678-1234-567812345678"
-            in result.output
+            "12345678-1234-5678-1234-567812345678" in result.output
         )
 
 
@@ -349,6 +361,8 @@ def test_create_launch_task_region_override_is_used(monkeypatch):
     boto3_calls = []
     real_boto3_client = boto3.client
 
+    _stub_ami_validation(monkeypatch)
+
     with mock_aws():
 
         def _moto_boto3_client(service_name, region_name):
@@ -397,6 +411,8 @@ def test_create_launch_task_ami_override_is_used(monkeypatch):
     runner = CliRunner()
     store = {"db_paths": [], "tasks": []}
     real_boto3_client = boto3.client
+
+    _stub_ami_validation(monkeypatch)
 
     with mock_aws():
         monkeypatch.setattr(
@@ -453,3 +469,116 @@ def test_create_launch_task_re_raises_validation_error_as_click_exception(monkey
     assert "boom" in result.output
     assert store["db_paths"] == []
     assert store["tasks"] == []
+
+
+def test_create_launch_task_validates_ami_with_normalized_values(monkeypatch):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    captured = []
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region: None,
+    )
+
+    def _capture_ami_validation(ami_id, region):
+        captured.append({"ami_id": ami_id, "region": region})
+
+    monkeypatch.setattr(cli_module, "validate_launch_ami", _capture_ami_validation)
+    monkeypatch.setattr(
+        cli_module.uuid,
+        "uuid4",
+        lambda: uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+    )
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--region",
+            " us-east-1 ",
+            "--ami-id",
+            " AMI-0ABC123456789DEF0 ",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == [{"ami_id": "ami-0abc123456789def0", "region": "us-east-1"}]
+
+
+def test_create_launch_task_re_raises_ami_validation_error_as_click_exception(
+    monkeypatch,
+):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region: None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region: (_ for _ in ()).throw(RuntimeError("ami boom")),
+    )
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+
+    result = runner.invoke(
+        cli_module.cli,
+        ["create-launch-task", "--instance-type", "g5.xlarge"],
+    )
+
+    assert result.exit_code != 0
+    assert "ami boom" in result.output
+    assert store["db_paths"] == []
+    assert store["tasks"] == []
+
+
+def test_smoke_launch_and_teardown_flow_in_moto(tmp_path):
+    runner = CliRunner()
+    db_path = tmp_path / "eco388-smoke.db"
+
+    with mock_aws():
+        ec2_client = boto3.client("ec2", region_name="us-east-1")
+        ami_id = ec2_client.register_image(Name="eco388-smoke-ami")["ImageId"]
+
+        create_result = runner.invoke(
+            cli_module.cli,
+            [
+                "create-launch-task",
+                "--instance-type",
+                "g5.xlarge",
+                "--ami-id",
+                ami_id,
+                "--db-path",
+                str(db_path),
+            ],
+        )
+        assert create_result.exit_code == 0
+
+        worker_result = runner.invoke(
+            cli_module.cli,
+            ["worker", "--launch-task", "--db-path", str(db_path)],
+        )
+        assert worker_result.exit_code == 0
+        match = re.search(r"instance '([^']+)'", worker_result.output)
+        assert match is not None
+        instance_id = match.group(1)
+
+        describe_result = ec2_client.describe_instances(InstanceIds=[instance_id])
+        state = describe_result["Reservations"][0]["Instances"][0]["State"]["Name"]
+        assert state == "running"
+
+        ec2_client.terminate_instances(InstanceIds=[instance_id])
+        waiter = ec2_client.get_waiter("instance_terminated")
+        waiter.wait(
+            InstanceIds=[instance_id], WaiterConfig={"Delay": 1, "MaxAttempts": 10}
+        )
+        final_result = ec2_client.describe_instances(InstanceIds=[instance_id])
+        final_state = final_result["Reservations"][0]["Instances"][0]["State"]["Name"]
+        assert final_state == "terminated"
