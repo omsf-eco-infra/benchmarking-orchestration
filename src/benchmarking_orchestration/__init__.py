@@ -6,7 +6,12 @@ from pathlib import Path
 import click
 from .tasks import TaskStatusDB
 
-from .aws import DEFAULT_LAUNCH_AMI_ID, launch_ec2_instance, validate_launch_instance_type
+from .aws import (
+    DEFAULT_LAUNCH_AMI_ID,
+    launch_ec2_instance,
+    validate_launch_ami,
+    validate_launch_instance_type,
+)
 
 
 def _normalize_required_value(field_name: str, value: str) -> str:
@@ -272,7 +277,9 @@ def worker(launch_task: bool, db_path: str) -> None:
                 f"Failed to process launch task '{task}' and failed to mark it as failed "
                 f"in database '{normalized_db_path}': {mark_exc}. Original error: {exc}"
             ) from exc
-        raise click.ClickException(f"Failed to process launch task '{task}': {exc}") from exc
+        raise click.ClickException(
+            f"Failed to process launch task '{task}': {exc}"
+        ) from exc
 
     try:
         task_db.mark_task_completed(task, success=True)
@@ -288,9 +295,7 @@ def worker(launch_task: bool, db_path: str) -> None:
 @cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")
 @click.option("--instance-type", required=True, type=str)
 @click.option("--region", default="us-east-1", show_default=True, type=str)
-@click.option(
-    "--ami-id", default=DEFAULT_LAUNCH_AMI_ID, show_default=True, type=str
-)
+@click.option("--ami-id", default=DEFAULT_LAUNCH_AMI_ID, show_default=True, type=str)
 @click.option("--db-path", default="task_status.db", show_default=True, type=str)
 @click.option("--max-tries", default=1, show_default=True, type=click.IntRange(min=1))
 def create_launch_task(
@@ -327,10 +332,13 @@ def create_launch_task(
 
     try:
         validate_launch_instance_type(normalized_instance_type, normalized_region)
+        validate_launch_ami(normalized_ami_id, normalized_region)
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
-    task_id = _build_task_id(normalized_region, normalized_instance_type, normalized_ami_id)
+    task_id = _build_task_id(
+        normalized_region, normalized_instance_type, normalized_ami_id
+    )
 
     try:
         task_db = TaskStatusDB.from_filename(Path(normalized_db_path))
