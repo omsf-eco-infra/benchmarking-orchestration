@@ -1,7 +1,7 @@
 from typing import Any, Iterable
 
 import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, WaiterError
 
 DEFAULT_LAUNCH_AMI_ID = "ami-0ec16471888b25545"
 
@@ -177,6 +177,67 @@ def validate_launch_instance_type(
         )
 
 
+def validate_launch_ami(
+    ami_id: str, region: str = "us-east-1", ec2_client: Any = None
+) -> None:
+    """Validate that a launch AMI exists and is available in AWS.
+
+    Parameters
+    ----------
+    ami_id : str
+        EC2 AMI identifier to validate.
+    region : str, default="us-east-1"
+        AWS region where AMI availability should be checked.
+    ec2_client : Any, optional
+        Boto3 EC2 client (or compatible test double). When ``None``,
+        a client is created from ``boto3``.
+
+    Raises
+    ------
+    ValueError
+        If the AMI identifier is empty.
+    RuntimeError
+        If AWS validation fails, the AMI is missing in region, or the
+        AMI state is not ``available``.
+    """
+    normalized_ami_id = ami_id.strip().lower()
+    if not normalized_ami_id:
+        raise ValueError("ami id cannot be empty.")
+
+    normalized_region = region.strip()
+    if not normalized_region:
+        raise ValueError("region cannot be empty.")
+
+    ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    try:
+        response = ec2.describe_images(ImageIds=[normalized_ami_id])
+    except ClientError as exc:
+        error = exc.response.get("Error", {})
+        code = error.get("Code", "")
+        message = error.get("Message", str(exc))
+        if code == "InvalidAMIID.NotFound":
+            raise RuntimeError(
+                f"AMI '{normalized_ami_id}' is unavailable in region '{normalized_region}'."
+            ) from exc
+        raise RuntimeError(
+            f"AWS error while validating AMI '{normalized_ami_id}' in region "
+            f"'{normalized_region}': {code or message}"
+        ) from exc
+    except BotoCoreError as exc:
+        raise RuntimeError(
+            f"AWS error while validating AMI '{normalized_ami_id}' in region "
+            f"'{normalized_region}': {exc}"
+        ) from exc
+
+    images = response.get("Images", [])
+    first_image = images[0] if images else {}
+    state = first_image.get("State")
+    if not first_image or state != "available":
+        raise RuntimeError(
+            f"AMI '{normalized_ami_id}' is unavailable in region '{normalized_region}'."
+        )
+
+
 def launch_ec2_instance(
     instance_type: str,
     ami_id: str = DEFAULT_LAUNCH_AMI_ID,
@@ -207,8 +268,8 @@ def launch_ec2_instance(
     ValueError
         If required inputs are empty.
     RuntimeError
-        If AWS launch fails or response data does not include an
-        instance identifier.
+        If AWS launch fails, the instance does not reach ``running``
+        state, or response data does not include an instance identifier.
     """
     normalized_instance_type = instance_type.strip().lower()
     if not normalized_instance_type:
@@ -252,6 +313,24 @@ def launch_ec2_instance(
             f"AWS did not return an instance ID for instance type '{normalized_instance_type}' "
             f"with AMI '{normalized_ami_id}' in region '{normalized_region}'."
         )
+
+    try:
+        waiter = ec2.get_waiter("instance_running")
+        waiter.wait(
+            InstanceIds=[instance_id],
+            WaiterConfig={"Delay": 5, "MaxAttempts": 24},
+        )
+    except WaiterError as exc:
+        raise RuntimeError(
+            f"Instance '{instance_id}' did not reach running state in region "
+            f"'{normalized_region}'."
+        ) from exc
+    except BotoCoreError as exc:
+        raise RuntimeError(
+            f"AWS error while waiting for instance '{instance_id}' to reach "
+            f"running state in region '{normalized_region}': {exc}"
+        ) from exc
+
     return instance_id
 
 
