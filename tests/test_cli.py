@@ -31,13 +31,13 @@ def _build_fake_task_db(store):
             store["db_paths"].append(filename)
             return cls()
 
-        def add_task_with_type(self, taskid, requirements, max_tries, task_type):
+        def add_task_with_capability(self, taskid, requirements, max_tries, capability):
             store["tasks"].append(
                 {
                     "taskid": taskid,
                     "requirements": requirements,
                     "max_tries": max_tries,
-                    "task_type": task_type,
+                    "capability": capability,
                 }
             )
 
@@ -55,7 +55,7 @@ def test_cli_no_args_shows_help_and_lists_worker():
     assert "quota" not in result.output.lower()
 
 
-def test_worker_with_launch_task_capability_exits_success_when_no_tasks(monkeypatch):
+def test_worker_with_launch_capability_exits_success_when_no_tasks(monkeypatch):
     runner = CliRunner()
     store = {"db_paths": [], "checkout_caps": []}
 
@@ -65,17 +65,37 @@ def test_worker_with_launch_task_capability_exits_success_when_no_tasks(monkeypa
             store["db_paths"].append(filename)
             return cls()
 
-        def check_out_task_with_type(self, task_type):
-            store["checkout_caps"].append(task_type)
+        def check_out_task_with_capability(self, capability):
+            store["checkout_caps"].append(capability)
             return None
 
     monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
-    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
     assert result.exit_code == 0
     assert store["db_paths"] == [Path("task_status.db")]
-    assert store["checkout_caps"] == ["ec2-launch"]
-    assert "No available ec2-launch tasks." in result.output
+    assert store["checkout_caps"] == ["launch"]
+    assert "No available launch tasks." in result.output
+
+
+def test_worker_capability_is_case_insensitive(monkeypatch):
+    runner = CliRunner()
+    store = {"checkout_caps": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            store["checkout_caps"].append(capability)
+            return None
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "LAUNCH"])
+
+    assert result.exit_code == 0
+    assert store["checkout_caps"] == ["launch"]
 
 
 def test_worker_launches_task_and_marks_success(monkeypatch):
@@ -96,8 +116,8 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
             store["db_paths"].append(filename)
             return cls()
 
-        def check_out_task_with_type(self, task_type):
-            store["checkout_caps"].append(task_type)
+        def check_out_task_with_capability(self, capability):
+            store["checkout_caps"].append(capability)
             return taskid
 
         def mark_task_completed(self, taskid_value, success):
@@ -111,11 +131,11 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
 
     monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
     monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
-    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
     assert result.exit_code == 0
     assert store["db_paths"] == [Path("task_status.db")]
-    assert store["checkout_caps"] == ["ec2-launch"]
+    assert store["checkout_caps"] == ["launch"]
     assert store["launch_calls"] == [
         {
             "instance_type": "g5.xlarge",
@@ -139,7 +159,7 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
         def from_filename(cls, filename):
             return cls()
 
-        def check_out_task_with_type(self, task_type):
+        def check_out_task_with_capability(self, capability):
             return taskid
 
         def mark_task_completed(self, taskid_value, success):
@@ -153,7 +173,7 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
             RuntimeError("boom")
         ),
     )
-    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
     assert result.exit_code != 0
     assert "Failed to process launch task" in result.output
@@ -171,7 +191,7 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
         def from_filename(cls, filename):
             return cls()
 
-        def check_out_task_with_type(self, task_type):
+        def check_out_task_with_capability(self, capability):
             return taskid
 
         def mark_task_completed(self, taskid_value, success):
@@ -185,7 +205,7 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
             AssertionError("launch helper should not be called for malformed task ID")
         ),
     )
-    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
     assert result.exit_code != 0
     assert "Invalid launch task ID format" in result.output
@@ -202,7 +222,7 @@ def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
         def from_filename(cls, filename):
             return cls()
 
-        def check_out_task_with_type(self, task_type):
+        def check_out_task_with_capability(self, capability):
             return taskid
 
         def mark_task_completed(self, taskid_value, success):
@@ -217,7 +237,7 @@ def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
     monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
     monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
 
-    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
     assert result.exit_code == 0
     assert store["launch_calls"] == [
@@ -230,28 +250,34 @@ def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
 
 
-def test_worker_without_capabilities_fails():
+def test_worker_requires_capability_flag():
     runner = CliRunner()
 
     result = runner.invoke(cli_module.cli, ["worker"])
 
     assert result.exit_code != 0
-    assert (
-        "At least one worker capability must be enabled. Use --launch-task."
-        in result.output
-    )
+    assert "Missing option '--capability'" in result.output
 
 
-def test_worker_explicit_no_launch_task_fails():
+def test_worker_rejects_invalid_capability_value():
     runner = CliRunner()
 
-    result = runner.invoke(cli_module.cli, ["worker", "--no-launch-task"])
+    result = runner.invoke(
+        cli_module.cli, ["worker", "--capability", "not-a-real-capability"]
+    )
 
     assert result.exit_code != 0
-    assert (
-        "At least one worker capability must be enabled. Use --launch-task."
-        in result.output
-    )
+    assert "Invalid value for '--capability'" in result.output
+    assert "launch" in result.output
+
+
+def test_worker_rejects_legacy_launch_task_flag():
+    runner = CliRunner()
+
+    result = runner.invoke(cli_module.cli, ["worker", "--launch-task"])
+
+    assert result.exit_code != 0
+    assert "No such option: --launch-task" in result.output
 
 
 def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
@@ -290,7 +316,7 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
         created = store["tasks"][0]
         assert created["requirements"] == []
         assert created["max_tries"] == 1
-        assert created["task_type"] == "ec2-launch"
+        assert created["capability"] == "launch"
         assert (
             created["taskid"] == "us-east-1:g5.xlarge:"
             f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
@@ -401,7 +427,7 @@ def test_create_launch_task_region_override_is_used(monkeypatch):
 
         created = store["tasks"][0]
         assert created["max_tries"] == 3
-        assert created["task_type"] == "ec2-launch"
+        assert created["capability"] == "launch"
         assert created["taskid"].startswith(
             f"us-west-2:vt1.3xlarge:{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
         )
@@ -563,7 +589,7 @@ def test_smoke_launch_and_teardown_flow_in_moto(tmp_path):
 
         worker_result = runner.invoke(
             cli_module.cli,
-            ["worker", "--launch-task", "--db-path", str(db_path)],
+            ["worker", "--capability", "launch", "--db-path", str(db_path)],
         )
         assert worker_result.exit_code == 0
         match = re.search(r"instance '([^']+)'", worker_result.output)
