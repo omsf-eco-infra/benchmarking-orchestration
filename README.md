@@ -31,7 +31,7 @@ pixi run python -m benchmarking_orchestration create-launch-task \
 Run the worker to process launch tasks:
 
 ```bash
-pixi run python -m benchmarking_orchestration worker --launch-task
+pixi run python -m benchmarking_orchestration worker --capability launch
 ```
 
 Show CLI help:
