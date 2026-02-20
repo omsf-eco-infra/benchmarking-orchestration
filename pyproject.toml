@@ -29,6 +29,7 @@ dev = { features = ["test", "dev"], solve-group = "default"}
 [tool.pixi.feature.test.dependencies]
 pytest-xdist = ">=3.8.0,<4"
 pytest = ">=9.0.2,<10"
+pytest-cov = ">=7.0.0,<8"
 moto = ">=5.1.21,<6"
 
 [tool.pixi.feature.test.tasks]
