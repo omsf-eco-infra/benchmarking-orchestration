@@ -44,12 +44,14 @@ pixi run python -m benchmarking_orchestration --help
 
 - `--region` (default: `us-east-1`)
 - `--ami-id` (default: `ami-0ec16471888b25545`)
+- `--cloud-init-file` (optional path to a cloud-init script for EC2 user-data)
 - `--db-path` (default: `task_status.db`)
 - `--max-tries` for retry attempts on created tasks
 
 Task IDs are created in this format:
 
-`<region>:<instance_type>:<ami_id>:<uuid4>`
+- `<region>:<instance_type>:<ami_id>:<uuid4>`
+- `<region>:<instance_type>:<ami_id>:<cloud_init_b64>:<uuid4>` when `--cloud-init-file` is set
 
 ## Development
 
