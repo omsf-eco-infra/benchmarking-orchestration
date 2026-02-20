@@ -34,6 +34,22 @@ class TaskStatusDB(exorcist.TaskStatusDB):
                 )
             )
 
+    @classmethod
+    def from_environment_variables(
+        cls, db_url: str, auth_token: str, overwrite: bool = False
+    ):
+        engine = sqla.create_engine(
+            f"sqlite+{db_url}?secure=true",
+            connect_args={
+                "auth_token": auth_token,
+            },
+        )
+        if overwrite:
+            metadata = sqla.MetaData()
+            metadata.reflect(bind=engine)
+            metadata.drop_all(engine)
+        return cls(engine)
+
     def add_task_with_capability(
         self,
         taskid: str,
