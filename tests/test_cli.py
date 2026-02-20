@@ -1,3 +1,4 @@
+import base64
 import uuid
 from pathlib import Path
 import re
@@ -123,9 +124,14 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
         def mark_task_completed(self, taskid_value, success):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
-    def _fake_launch_ec2_instance(instance_type, ami_id, region):
+    def _fake_launch_ec2_instance(instance_type, ami_id, region, user_data=None):
         store["launch_calls"].append(
-            {"instance_type": instance_type, "ami_id": ami_id, "region": region}
+            {
+                "instance_type": instance_type,
+                "ami_id": ami_id,
+                "region": region,
+                "user_data": user_data,
+            }
         )
         return "i-1234567890abcdef0"
 
@@ -141,6 +147,7 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
             "instance_type": "g5.xlarge",
             "ami_id": "ami-0abc123456789def0",
             "region": "us-east-1",
+            "user_data": None,
         }
     ]
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
@@ -169,7 +176,7 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region: (_ for _ in ()).throw(
+        lambda instance_type, ami_id, region, user_data=None: (_ for _ in ()).throw(
             RuntimeError("boom")
         ),
     )
@@ -201,7 +208,7 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region: (_ for _ in ()).throw(
+        lambda instance_type, ami_id, region, user_data=None: (_ for _ in ()).throw(
             AssertionError("launch helper should not be called for malformed task ID")
         ),
     )
@@ -212,9 +219,47 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
     assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
 
 
-def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
+def test_worker_marks_failure_for_legacy_three_part_taskid(monkeypatch):
     runner = CliRunner()
     taskid = "us-east-1:g5.xlarge:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(
+        cli_module,
+        "launch_ec2_instance",
+        lambda instance_type, ami_id, region, user_data=None: (_ for _ in ()).throw(
+            AssertionError("launch helper should not be called for legacy 3-part task ID")
+        ),
+    )
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
+
+    assert result.exit_code != 0
+    assert "Invalid launch task ID format" in result.output
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
+
+
+def test_worker_launches_task_with_cloud_init_payload(monkeypatch):
+    runner = CliRunner()
+    cloud_init_text = "#cloud-config\nruncmd:\n  - echo hello\n"
+    cloud_init_b64 = base64.b64encode(cloud_init_text.encode("utf-8")).decode("ascii")
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
+        f"{cloud_init_b64}:"
+        "12345678-1234-5678-1234-567812345678"
+    )
     store = {"launch_calls": [], "mark_calls": []}
 
     class _FakeTaskStatusDB:
@@ -228,9 +273,14 @@ def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
         def mark_task_completed(self, taskid_value, success):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
-    def _fake_launch_ec2_instance(instance_type, ami_id, region):
+    def _fake_launch_ec2_instance(instance_type, ami_id, region, user_data=None):
         store["launch_calls"].append(
-            {"instance_type": instance_type, "ami_id": ami_id, "region": region}
+            {
+                "instance_type": instance_type,
+                "ami_id": ami_id,
+                "region": region,
+                "user_data": user_data,
+            }
         )
         return "i-1234567890abcdef0"
 
@@ -243,11 +293,48 @@ def test_worker_parses_legacy_taskid_and_uses_default_ami(monkeypatch):
     assert store["launch_calls"] == [
         {
             "instance_type": "g5.xlarge",
-            "ami_id": aws_module.DEFAULT_LAUNCH_AMI_ID,
+            "ami_id": "ami-0abc123456789def0",
             "region": "us-east-1",
+            "user_data": cloud_init_text,
         }
     ]
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
+
+
+def test_worker_marks_failure_when_cloud_init_payload_is_invalid(monkeypatch):
+    runner = CliRunner()
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
+        "not-valid-base64:"
+        "12345678-1234-5678-1234-567812345678"
+    )
+    store = {"mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(
+        cli_module,
+        "launch_ec2_instance",
+        lambda instance_type, ami_id, region, user_data=None: (_ for _ in ()).throw(
+            AssertionError("launch helper should not run for invalid cloud-init payload")
+        ),
+    )
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
+
+    assert result.exit_code != 0
+    assert "Invalid cloud-init payload encoding in launch task ID" in result.output
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
 
 
 def test_worker_requires_capability_flag():
@@ -327,6 +414,80 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
             f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
             "12345678-1234-5678-1234-567812345678" in result.output
         )
+
+
+def test_create_launch_task_with_cloud_init_file_embeds_payload(monkeypatch, tmp_path):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    cloud_init_path = tmp_path / "cloud-init.yaml"
+    cloud_init_content = "#cloud-config\nruncmd:\n  - echo hello\n"
+    cloud_init_path.write_text(cloud_init_content)
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region: None,
+    )
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module.uuid,
+        "uuid4",
+        lambda: uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+    )
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--cloud-init-file",
+            str(cloud_init_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert store["db_paths"] == [Path("task_status.db")]
+    assert len(store["tasks"]) == 1
+    encoded_payload = base64.b64encode(cloud_init_content.encode("utf-8")).decode("ascii")
+    expected_taskid = (
+        "us-east-1:g5.xlarge:"
+        f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+        f"{encoded_payload}:"
+        "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    )
+    assert store["tasks"][0]["taskid"] == expected_taskid
+    assert expected_taskid in result.output
+
+
+def test_create_launch_task_with_missing_cloud_init_file_returns_error(monkeypatch):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region: None,
+    )
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--cloud-init-file",
+            "does-not-exist-cloud-init.yaml",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Unable to read cloud-init file" in result.output
+    assert store["db_paths"] == []
+    assert store["tasks"] == []
 
 
 def test_create_launch_task_rejects_non_g_or_vt_without_aws_or_db_calls(monkeypatch):

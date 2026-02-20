@@ -89,6 +89,23 @@ class _WaiterFailureEC2Client:
         return self._Waiter()
 
 
+class _CaptureRunInstancesClient:
+    class _Waiter:
+        def wait(self, **kwargs):
+            return None
+
+    def __init__(self):
+        self.run_instances_calls = []
+
+    def run_instances(self, **kwargs):
+        self.run_instances_calls.append(kwargs)
+        return {"Instances": [{"InstanceId": "i-1234567890abcdef0"}]}
+
+    def get_waiter(self, waiter_name):
+        assert waiter_name == "instance_running"
+        return self._Waiter()
+
+
 def test_quota_name_match():
     assert _is_ondemand_g_quota_name("Running On-Demand G and VT instances")
     assert not _is_ondemand_g_quota_name(
@@ -321,3 +338,32 @@ def test_launch_ec2_instance_raises_for_missing_instance_id():
 def test_launch_ec2_instance_raises_when_instance_never_reaches_running():
     with pytest.raises(RuntimeError, match="did not reach running state"):
         launch_ec2_instance("g5.xlarge", ec2_client=_WaiterFailureEC2Client())
+
+
+def test_launch_ec2_instance_passes_user_data_when_provided():
+    client = _CaptureRunInstancesClient()
+
+    launch_ec2_instance(
+        "g5.xlarge",
+        ami_id="ami-0ec16471888b25545",
+        region="us-east-1",
+        user_data="#cloud-config\nruncmd:\n  - echo hi\n",
+        ec2_client=client,
+    )
+
+    assert len(client.run_instances_calls) == 1
+    assert "UserData" in client.run_instances_calls[0]
+
+
+def test_launch_ec2_instance_omits_user_data_when_not_provided():
+    client = _CaptureRunInstancesClient()
+
+    launch_ec2_instance(
+        "g5.xlarge",
+        ami_id="ami-0ec16471888b25545",
+        region="us-east-1",
+        ec2_client=client,
+    )
+
+    assert len(client.run_instances_calls) == 1
+    assert "UserData" not in client.run_instances_calls[0]
