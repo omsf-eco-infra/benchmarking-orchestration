@@ -242,6 +242,7 @@ def launch_ec2_instance(
     instance_type: str,
     ami_id: str = DEFAULT_LAUNCH_AMI_ID,
     region: str = "us-east-1",
+    user_data: str | None = None,
     ec2_client: Any = None,
 ) -> str:
     """Launch a single EC2 instance and return its instance ID.
@@ -254,6 +255,8 @@ def launch_ec2_instance(
         AMI identifier to launch.
     region : str, default="us-east-1"
         AWS region where the launch should occur.
+    user_data : str, optional
+        Cloud-init user-data content to pass to EC2 at launch time.
     ec2_client : Any, optional
         Boto3 EC2 client (or compatible test double). When ``None``,
         a client is created from ``boto3``.
@@ -284,13 +287,17 @@ def launch_ec2_instance(
         raise ValueError("region cannot be empty.")
 
     ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    run_instances_kwargs = {
+        "ImageId": normalized_ami_id,
+        "InstanceType": normalized_instance_type,
+        "MinCount": 1,
+        "MaxCount": 1,
+    }
+    if user_data is not None:
+        run_instances_kwargs["UserData"] = user_data
+
     try:
-        response = ec2.run_instances(
-            ImageId=normalized_ami_id,
-            InstanceType=normalized_instance_type,
-            MinCount=1,
-            MaxCount=1,
-        )
+        response = ec2.run_instances(**run_instances_kwargs)
     except ClientError as exc:
         error = exc.response.get("Error", {})
         code = error.get("Code", "")

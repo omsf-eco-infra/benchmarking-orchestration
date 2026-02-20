@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import uuid
 from enum import StrEnum
 from pathlib import Path
@@ -110,6 +112,7 @@ def _build_task_id(
     region: str,
     instance_type: str,
     ami_id: str = DEFAULT_LAUNCH_AMI_ID,
+    cloud_init_b64: str | None = None,
 ) -> str:
     """Build a unique task identifier for EC2 launch orchestration.
 
@@ -121,13 +124,20 @@ def _build_task_id(
         Validated EC2 instance type.
     ami_id : str, default=DEFAULT_LAUNCH_AMI_ID
         AMI identifier to use for launch.
+    cloud_init_b64 : str, optional
+        Base64-encoded cloud-init payload to embed in task metadata.
 
     Returns
     -------
     str
-        Task identifier in ``<region>:<instance_type>:<ami_id>:<uuid4>`` format.
+        Task identifier in ``<region>:<instance_type>:<ami_id>:<uuid4>`` format
+        when no cloud-init payload is provided, otherwise
+        ``<region>:<instance_type>:<ami_id>:<cloud_init_b64>:<uuid4>``.
     """
-    return f"{region}:{instance_type}:{ami_id}:{uuid.uuid4()}"
+    if cloud_init_b64 is None:
+        return f"{region}:{instance_type}:{ami_id}:{uuid.uuid4()}"
+
+    return f"{region}:{instance_type}:{ami_id}:{cloud_init_b64}:{uuid.uuid4()}"
 
 
 def _normalize_ami_id(ami_id: str) -> str:
@@ -146,65 +156,157 @@ def _normalize_ami_id(ami_id: str) -> str:
     return _normalize_required_value("ami id", ami_id).lower()
 
 
-def _parse_launch_task_id(taskid: str) -> tuple[str, str, str]:
+def _parse_launch_task_id(taskid: str) -> tuple[str, str, str, str | None]:
     """Parse a launch task identifier into region and instance type.
 
     Parameters
     ----------
     taskid : str
         Task identifier in
-        ``<region>:<instance_type>:<ami_id>:<uuid4>`` format. Legacy
-        ``<region>:<instance_type>:<uuid4>`` format is also accepted.
+        ``<region>:<instance_type>:<ami_id>:<uuid4>`` format,
+        or ``<region>:<instance_type>:<ami_id>:<cloud_init_b64>:<uuid4>`` format.
 
     Returns
     -------
-    tuple[str, str, str]
-        Parsed ``(region, instance_type, ami_id)`` values.
+    tuple[str, str, str, str | None]
+        Parsed ``(region, instance_type, ami_id, cloud_init_b64)`` values.
 
     Raises
     ------
     ValueError
         If the task identifier is malformed or missing required parts.
     """
+    expected_format_message = (
+        "Invalid launch task ID format. Expected "
+        "'<region>:<instance_type>:<ami_id>:<cloud_init_b64>:<uuid4>', "
+        "or '<region>:<instance_type>:<ami_id>:<uuid4>'."
+    )
     parts = taskid.split(":")
-    if len(parts) == 3:
-        region, instance_type, task_uuid = parts
-        ami_id = DEFAULT_LAUNCH_AMI_ID
-    elif len(parts) == 4:
+    if len(parts) == 4:
         region, instance_type, ami_id, task_uuid = parts
+        cloud_init_b64 = None
+    elif len(parts) == 5:
+        region, instance_type, ami_id, cloud_init_b64, task_uuid = parts
     else:
-        raise ValueError(
-            "Invalid launch task ID format. Expected "
-            "'<region>:<instance_type>:<ami_id>:<uuid4>' or "
-            "'<region>:<instance_type>:<uuid4>'."
-        )
+        raise ValueError(expected_format_message)
 
     normalized_region = region.strip()
     normalized_instance_type = instance_type.strip().lower()
     normalized_ami_id = ami_id.strip().lower()
+    normalized_cloud_init_b64 = (
+        cloud_init_b64.strip() if cloud_init_b64 is not None else None
+    )
     normalized_task_uuid = task_uuid.strip()
     if (
         not normalized_region
         or not normalized_instance_type
         or not normalized_ami_id
+        or (cloud_init_b64 is not None and not normalized_cloud_init_b64)
         or not normalized_task_uuid
     ):
-        raise ValueError(
-            "Invalid launch task ID format. Expected "
-            "'<region>:<instance_type>:<ami_id>:<uuid4>' or "
-            "'<region>:<instance_type>:<uuid4>'."
-        )
+        raise ValueError(expected_format_message)
 
     try:
         uuid.UUID(normalized_task_uuid)
     except ValueError as exc:
-        raise ValueError(
-            "Invalid launch task ID format. Expected "
-            "'<region>:<instance_type>:<ami_id>:<uuid4>' or "
-            "'<region>:<instance_type>:<uuid4>'."
+        raise ValueError(expected_format_message) from exc
+
+    return (
+        normalized_region,
+        normalized_instance_type,
+        normalized_ami_id,
+        normalized_cloud_init_b64,
+    )
+
+
+def _normalize_cloud_init_file_path(cloud_init_file: str | None) -> str | None:
+    """Normalize an optional cloud-init file path.
+
+    Parameters
+    ----------
+    cloud_init_file : str, optional
+        Raw cloud-init file path from the CLI.
+
+    Returns
+    -------
+    str | None
+        Stripped file path, or ``None`` when no path is provided.
+
+    Raises
+    ------
+    click.BadParameter
+        If a value is provided but is empty after stripping.
+    """
+    if cloud_init_file is None:
+        return None
+    return _normalize_required_value("cloud init file", cloud_init_file)
+
+
+def _read_cloud_init_file_as_base64(cloud_init_file: str | None) -> str | None:
+    """Read a cloud-init file and return a base64 payload.
+
+    Parameters
+    ----------
+    cloud_init_file : str, optional
+        Path to a cloud-init file.
+
+    Returns
+    -------
+    str | None
+        Base64-encoded file contents when provided, otherwise ``None``.
+
+    Raises
+    ------
+    click.ClickException
+        If file reading fails or the file is empty.
+    """
+    normalized_path = _normalize_cloud_init_file_path(cloud_init_file)
+    if normalized_path is None:
+        return None
+
+    file_path = Path(normalized_path)
+    try:
+        file_bytes = file_path.read_bytes()
+    except OSError as exc:
+        raise click.ClickException(
+            f"Unable to read cloud-init file '{normalized_path}': {exc}"
         ) from exc
 
-    return normalized_region, normalized_instance_type, normalized_ami_id
+    if not file_bytes:
+        raise click.ClickException(f"Cloud-init file '{normalized_path}' is empty.")
+
+    return base64.b64encode(file_bytes).decode("ascii")
+
+
+def _decode_cloud_init_base64(cloud_init_b64: str) -> str:
+    """Decode a base64 cloud-init payload from task metadata.
+
+    Parameters
+    ----------
+    cloud_init_b64 : str, optional
+        Base64 cloud-init payload parsed from the task ID.
+
+    Returns
+    -------
+    str | None
+        Decoded UTF-8 cloud-init content, or ``None`` if not provided.
+
+    Raises
+    ------
+    ValueError
+        If payload encoding is invalid or not UTF-8 text.
+    """
+    try:
+        decoded_bytes = base64.b64decode(cloud_init_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(
+            "Invalid cloud-init payload encoding in launch task ID."
+        ) from exc
+
+    try:
+        return decoded_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Cloud-init payload is not valid UTF-8 text.") from exc
 
 
 def _parse_worker_capability(
@@ -277,9 +379,17 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
         return
 
     try:
-        task_region, task_instance_type, task_ami_id = _parse_launch_task_id(task)
+        task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
+            _parse_launch_task_id(task)
+        )
+        cloud_init_user_data = None
+        if cloud_init_b64 is not None:
+            cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
         instance_id = launch_ec2_instance(
-            task_instance_type, ami_id=task_ami_id, region=task_region
+            task_instance_type,
+            ami_id=task_ami_id,
+            region=task_region,
+            user_data=cloud_init_user_data,
         )
     except Exception as exc:
         try:
@@ -308,12 +418,14 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
 @click.option("--instance-type", required=True, type=str)
 @click.option("--region", default="us-east-1", show_default=True, type=str)
 @click.option("--ami-id", default=DEFAULT_LAUNCH_AMI_ID, show_default=True, type=str)
+@click.option("--cloud-init-file", default=None, type=str)
 @click.option("--db-path", default="task_status.db", show_default=True, type=str)
 @click.option("--max-tries", default=1, show_default=True, type=click.IntRange(min=1))
 def create_launch_task(
     instance_type: str,
     region: str,
     ami_id: str,
+    cloud_init_file: str | None,
     db_path: str,
     max_tries: int,
 ) -> None:
@@ -327,6 +439,8 @@ def create_launch_task(
         AWS region used for instance-type validation and task identity.
     ami_id : str
         AMI identifier recorded with task launch metadata.
+    cloud_init_file : str, optional
+        Cloud-init file path to encode and store with task launch metadata.
     db_path : str
         Filesystem path to the task status database.
     max_tries : int
@@ -348,8 +462,13 @@ def create_launch_task(
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
+    cloud_init_b64 = _read_cloud_init_file_as_base64(cloud_init_file)
+
     task_id = _build_task_id(
-        normalized_region, normalized_instance_type, normalized_ami_id
+        normalized_region,
+        normalized_instance_type,
+        normalized_ami_id,
+        cloud_init_b64=cloud_init_b64,
     )
 
     try:
