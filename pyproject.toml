@@ -1,6 +1,6 @@
 [project]
 authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
-dependencies = []
+dependencies = ["sqlalchemy-libsql>=0.2.0"]
 name = "benchmarking-orchestration"
 requires-python = ">= 3.11"
 version = "0.1.0"
@@ -20,6 +20,7 @@ exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 [tool.pixi.dependencies]
 click = ">=8.3.1,<9"
 boto3 = ">=1.42.46,<2"
+python = "==3.13" # sqlalchemy-libsql does not work on Python 3.14 in testing
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
