@@ -22,6 +22,9 @@ class WorkerCapability(StrEnum):
     """Supported worker capability names."""
 
     LAUNCH = "launch"
+    G3 = "g3"
+    G4DN = "g4dn"
+    G5 = "g5"
 
 
 def _worker_capability_choices() -> tuple[str, ...]:
@@ -404,40 +407,48 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
         click.echo(f"No available {capability.value} tasks.")
         return
 
-    try:
-        task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
-            _parse_launch_task_id(task)
-        )
-        cloud_init_user_data = None
-        if cloud_init_b64 is not None:
-            cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
-        instance_id = launch_ec2_instance(
-            task_instance_type,
-            ami_id=task_ami_id,
-            region=task_region,
-            user_data=cloud_init_user_data,
-        )
-    except Exception as exc:
-        try:
+    match capability:
+        case WorkerCapability.LAUNCH:
+            try:
+                task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
+                    _parse_launch_task_id(task)
+                )
+                cloud_init_user_data = None
+                if cloud_init_b64 is not None:
+                    cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
+                instance_id = launch_ec2_instance(
+                    task_instance_type,
+                    ami_id=task_ami_id,
+                    region=task_region,
+                    user_data=cloud_init_user_data,
+                )
+            except Exception as exc:
+                try:
+                    task_db.mark_task_completed(task, success=False)
+                except Exception as mark_exc:
+                    raise click.ClickException(
+                        f"Failed to process launch task '{task}' and failed to mark it as failed "
+                        f"in database '{normalized_db_path}': {mark_exc}. Original error: {exc}"
+                    ) from exc
+                raise click.ClickException(
+                    f"Failed to process launch task '{task}': {exc}"
+                ) from exc
+
+            try:
+                task_db.mark_task_completed(task, success=True)
+            except Exception as exc:
+                raise click.ClickException(
+                    f"Launched instance '{instance_id}' for task '{task}', but failed to mark it "
+                    f"as completed in database '{normalized_db_path}': {exc}"
+                ) from exc
+
+            click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
+        case WorkerCapability.G4DN | WorkerCapability.G3:
+            # Do the bench task
             task_db.mark_task_completed(task, success=False)
-        except Exception as mark_exc:
-            raise click.ClickException(
-                f"Failed to process launch task '{task}' and failed to mark it as failed "
-                f"in database '{normalized_db_path}': {mark_exc}. Original error: {exc}"
-            ) from exc
-        raise click.ClickException(
-            f"Failed to process launch task '{task}': {exc}"
-        ) from exc
-
-    try:
-        task_db.mark_task_completed(task, success=True)
-    except Exception as exc:
-        raise click.ClickException(
-            f"Launched instance '{instance_id}' for task '{task}', but failed to mark it "
-            f"as completed in database '{normalized_db_path}': {exc}"
-        ) from exc
-
-    click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
+            click.echo(
+                f"Processed bench task '{task}' with capability '{capability.value}'"
+            )
 
 
 @cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")
@@ -504,7 +515,16 @@ def create_launch_task(
             max_tries=max_tries,
             capability=WorkerCapability.LAUNCH.value,
         )
-        # task_db.add_task(taskid=task_id, requirements=[], max_tries=max_tries)
+        instance_capability = WorkerCapability(
+            normalized_instance_type.split(".", maxsplit=1)[0]
+        )
+
+        task_db.add_task_with_capability(
+            taskid="bench",
+            requirements=[task_id],
+            max_tries=max_tries,
+            capability=instance_capability.value,
+        )
     except Exception as exc:
         raise click.ClickException(
             f"Unable to create task in database '{db_path}': {exc}"
