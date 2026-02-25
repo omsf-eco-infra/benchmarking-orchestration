@@ -117,25 +117,35 @@ def _setup_task_status_db(db_path: str | None) -> TaskStatusDB:
 
     Parameters
     ----------
-    db_path : str
-        Normalized filesystem path to the task status database.
+    db_path : str, optional
+        Filesystem path to a local task status database. When omitted,
+        this function prefers Turso environment variables when both are
+        configured and otherwise falls back to ``task_status.db``.
 
     Returns
     -------
     TaskStatusDB
         Initialized task status database client.
     """
-    if db_path is None:
-        turso_database_url = os.getenv("TURSO_DATABASE_URL")
-        turso_auth_token = os.getenv("TURSO_AUTH_TOKEN")
-        if not turso_database_url:
-            raise ValueError("Missing TURSO_DATABASE_URL")
-        if not turso_auth_token:
-            raise ValueError("Missing TURSO_AUTH_TOKEN")
+    normalized_db_path = (
+        Path(_normalize_db_path(db_path))
+        if db_path is not None
+        else Path("task_status.db")
+    )
+    if db_path is not None:
+        return TaskStatusDB.from_filename(normalized_db_path)
+
+    turso_database_url = os.getenv("TURSO_DATABASE_URL")
+    turso_auth_token = os.getenv("TURSO_AUTH_TOKEN")
+    if (
+        turso_database_url
+        and turso_auth_token
+        and hasattr(TaskStatusDB, "from_environment_variables")
+    ):
         return TaskStatusDB.from_environment_variables(
             turso_database_url, turso_auth_token
         )
-    return TaskStatusDB.from_filename(db_path)
+    return TaskStatusDB.from_filename(normalized_db_path)
 
 
 def _build_task_id(
@@ -395,12 +405,14 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
     capability : WorkerCapability
         Worker capability used to select which tasks to process.
     """
+    db_path_label = db_path if db_path is not None else "task_status.db"
+
     try:
         task_db = _setup_task_status_db(db_path)
         task = task_db.check_out_task_with_capability(capability.value)
     except Exception as exc:
         raise click.ClickException(
-            f"Unable to check out task from database '{db_path}': {exc}"
+            f"Unable to check out task from database '{db_path_label}': {exc}"
         ) from exc
 
     if task is None:
@@ -428,7 +440,7 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
                 except Exception as mark_exc:
                     raise click.ClickException(
                         f"Failed to process launch task '{task}' and failed to mark it as failed "
-                        f"in database '{normalized_db_path}': {mark_exc}. Original error: {exc}"
+                        f"in database '{db_path_label}': {mark_exc}. Original error: {exc}"
                     ) from exc
                 raise click.ClickException(
                     f"Failed to process launch task '{task}': {exc}"
@@ -439,7 +451,7 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
             except Exception as exc:
                 raise click.ClickException(
                     f"Launched instance '{instance_id}' for task '{task}', but failed to mark it "
-                    f"as completed in database '{normalized_db_path}': {exc}"
+                    f"as completed in database '{db_path_label}': {exc}"
                 ) from exc
 
             click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
@@ -507,6 +519,8 @@ def create_launch_task(
         cloud_init_b64=cloud_init_b64,
     )
 
+    db_path_label = db_path if db_path is not None else "task_status.db"
+
     try:
         task_db = _setup_task_status_db(db_path)
         task_db.add_task_with_capability(
@@ -515,19 +529,9 @@ def create_launch_task(
             max_tries=max_tries,
             capability=WorkerCapability.LAUNCH.value,
         )
-        instance_capability = WorkerCapability(
-            normalized_instance_type.split(".", maxsplit=1)[0]
-        )
-
-        task_db.add_task_with_capability(
-            taskid="bench",
-            requirements=[task_id],
-            max_tries=max_tries,
-            capability=instance_capability.value,
-        )
     except Exception as exc:
         raise click.ClickException(
-            f"Unable to create task in database '{db_path}': {exc}"
+            f"Unable to create task in database '{db_path_label}': {exc}"
         ) from exc
 
     click.echo(task_id)
