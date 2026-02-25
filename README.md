@@ -1,12 +1,13 @@
 # Benchmarking Orchestration
 
-Small CLI for scheduling and running AWS EC2 launch tasks for benchmarking workflows.
+Small CLI for scheduling AWS EC2 launch tasks and follow-on benchmark tasks.
 
 ## What it does
 
-- Creates launch tasks in a local task database (`task_status.db` by default).
+- Creates a launch task plus a dependent benchmark task in the task database.
 - Validates EC2 instance type and AMI before queuing tasks.
-- Runs a worker that checks out launch tasks and launches one EC2 instance per task.
+- Runs workers by capability (`launch`, `g3`, `g4dn`, `g5`, `vt1`).
+- Launch worker checks out launch tasks and launches one EC2 instance per task.
 - Focuses on G/VT instance families (for example `g5.xlarge`, `vt1.3xlarge`).
 
 ## Requirements
@@ -45,13 +46,34 @@ pixi run python -m benchmarking_orchestration --help
 - `--region` (default: `us-east-1`)
 - `--ami-id` (default: `ami-0ec16471888b25545`)
 - `--cloud-init-file` (optional path to a cloud-init script for EC2 user-data)
-- `--db-path` (default: `task_status.db`)
+- `--db-path` (optional; when omitted, uses Turso if `TURSO_DATABASE_URL` and
+  `TURSO_AUTH_TOKEN` are set, otherwise `task_status.db`)
 - `--max-tries` for retry attempts on created tasks
 
 Task IDs are created in this format:
 
 - `<region>:<instance_type>:<ami_id>:<uuid4>`
 - `<region>:<instance_type>:<ami_id>:<cloud_init_b64>:<uuid4>` when `--cloud-init-file` is set
+
+## Assumptions
+
+- Launch scheduling is limited to G/VT instance families.
+- Cloud-init payloads are stored inside task IDs as base64 and must decode to UTF-8 text.
+- `create-launch-task` always creates both launch and benchmark task records.
+- Benchmark worker capabilities are family-based (`g3`, `g4dn`, `g5`, `vt1`), and
+  the non-launch worker path is currently a placeholder.
+
+## Turso
+
+Turso support is used to back `TaskStatusDB` with a remote database instead of a
+local `task_status.db` file.
+
+- Purpose: share task queue state across multiple machines/workers and avoid
+  relying on one local SQLite file.
+- Auto-selection: when `--db-path` is omitted and both `TURSO_DATABASE_URL` and
+  `TURSO_AUTH_TOKEN` are set, the CLI connects to Turso.
+- Local override: when `--db-path` is provided, the CLI uses that local DB file
+  path instead.
 
 ## Development
 
