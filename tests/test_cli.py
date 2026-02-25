@@ -240,7 +240,9 @@ def test_worker_marks_failure_for_legacy_three_part_taskid(monkeypatch):
         cli_module,
         "launch_ec2_instance",
         lambda instance_type, ami_id, region, user_data=None: (_ for _ in ()).throw(
-            AssertionError("launch helper should not be called for legacy 3-part task ID")
+            AssertionError(
+                "launch helper should not be called for legacy 3-part task ID"
+            )
         ),
     )
 
@@ -326,7 +328,9 @@ def test_worker_marks_failure_when_cloud_init_payload_is_invalid(monkeypatch):
         cli_module,
         "launch_ec2_instance",
         lambda instance_type, ami_id, region, user_data=None: (_ for _ in ()).throw(
-            AssertionError("launch helper should not run for invalid cloud-init payload")
+            AssertionError(
+                "launch helper should not run for invalid cloud-init payload"
+            )
         ),
     )
 
@@ -398,17 +402,22 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
         assert result.exit_code == 0
         assert store["db_paths"] == [Path("task_status.db")]
         assert boto3_calls == [{"service_name": "ec2", "region_name": "us-east-1"}]
-        assert len(store["tasks"]) == 1
+        assert len(store["tasks"]) == 2
 
-        created = store["tasks"][0]
-        assert created["requirements"] == []
-        assert created["max_tries"] == 1
-        assert created["capability"] == "launch"
+        launch_task = store["tasks"][0]
+        assert launch_task["requirements"] == []
+        assert launch_task["max_tries"] == 1
+        assert launch_task["capability"] == "launch"
         assert (
-            created["taskid"] == "us-east-1:g5.xlarge:"
+            launch_task["taskid"] == "us-east-1:g5.xlarge:"
             f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
             "12345678-1234-5678-1234-567812345678"
         )
+        bench_task = store["tasks"][1]
+        assert bench_task["taskid"] == f"bench:{launch_task['taskid']}"
+        assert bench_task["requirements"] == [launch_task["taskid"]]
+        assert bench_task["max_tries"] == 1
+        assert bench_task["capability"] == "g5"
         assert (
             "us-east-1:g5.xlarge:"
             f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
@@ -449,8 +458,10 @@ def test_create_launch_task_with_cloud_init_file_embeds_payload(monkeypatch, tmp
 
     assert result.exit_code == 0
     assert store["db_paths"] == [Path("task_status.db")]
-    assert len(store["tasks"]) == 1
-    encoded_payload = base64.b64encode(cloud_init_content.encode("utf-8")).decode("ascii")
+    assert len(store["tasks"]) == 2
+    encoded_payload = base64.b64encode(cloud_init_content.encode("utf-8")).decode(
+        "ascii"
+    )
     expected_taskid = (
         "us-east-1:g5.xlarge:"
         f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
@@ -458,6 +469,9 @@ def test_create_launch_task_with_cloud_init_file_embeds_payload(monkeypatch, tmp
         "dddddddd-dddd-dddd-dddd-dddddddddddd"
     )
     assert store["tasks"][0]["taskid"] == expected_taskid
+    assert store["tasks"][1]["taskid"] == f"bench:{expected_taskid}"
+    assert store["tasks"][1]["requirements"] == [expected_taskid]
+    assert store["tasks"][1]["capability"] == "g5"
     assert expected_taskid in result.output
 
 
@@ -584,14 +598,19 @@ def test_create_launch_task_region_override_is_used(monkeypatch):
         assert result.exit_code == 0
         assert boto3_calls == [{"service_name": "ec2", "region_name": "us-west-2"}]
         assert store["db_paths"] == [Path("custom.db")]
-        assert len(store["tasks"]) == 1
+        assert len(store["tasks"]) == 2
 
-        created = store["tasks"][0]
-        assert created["max_tries"] == 3
-        assert created["capability"] == "launch"
-        assert created["taskid"].startswith(
+        launch_task = store["tasks"][0]
+        assert launch_task["max_tries"] == 3
+        assert launch_task["capability"] == "launch"
+        assert launch_task["taskid"].startswith(
             f"us-west-2:vt1.3xlarge:{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
         )
+        bench_task = store["tasks"][1]
+        assert bench_task["taskid"] == f"bench:{launch_task['taskid']}"
+        assert bench_task["requirements"] == [launch_task["taskid"]]
+        assert bench_task["max_tries"] == 3
+        assert bench_task["capability"] == "vt1"
 
 
 def test_create_launch_task_ami_override_is_used(monkeypatch):
@@ -628,11 +647,17 @@ def test_create_launch_task_ami_override_is_used(monkeypatch):
         )
 
         assert result.exit_code == 0
-        assert len(store["tasks"]) == 1
+        assert len(store["tasks"]) == 2
         assert (
             store["tasks"][0]["taskid"]
             == "us-east-1:g5.xlarge:ami-0abc123456789def0:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         )
+        assert (
+            store["tasks"][1]["taskid"]
+            == "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        )
+        assert store["tasks"][1]["requirements"] == [store["tasks"][0]["taskid"]]
+        assert store["tasks"][1]["capability"] == "g5"
         assert "with AMI 'ami-0abc123456789def0'" in result.output
 
 

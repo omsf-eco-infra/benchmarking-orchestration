@@ -25,6 +25,7 @@ class WorkerCapability(StrEnum):
     G3 = "g3"
     G4DN = "g4dn"
     G5 = "g5"
+    VT1 = "vt1"
 
 
 def _worker_capability_choices() -> tuple[str, ...]:
@@ -194,6 +195,34 @@ def _normalize_ami_id(ami_id: str) -> str:
         Lowercased, stripped AMI identifier.
     """
     return _normalize_required_value("ami id", ami_id).lower()
+
+
+def _resolve_bench_worker_capability(instance_type: str) -> WorkerCapability:
+    """Resolve benchmark worker capability from an EC2 instance type.
+
+    Parameters
+    ----------
+    instance_type : str
+        Normalized EC2 instance type string.
+
+    Returns
+    -------
+    WorkerCapability
+        Worker capability corresponding to the instance family.
+
+    Raises
+    ------
+    click.ClickException
+        If the instance family does not map to a supported worker capability.
+    """
+    instance_family = instance_type.split(".", maxsplit=1)[0]
+    try:
+        return WorkerCapability(instance_family)
+    except ValueError as exc:
+        raise click.ClickException(
+            f"Unsupported benchmark worker capability for instance family "
+            f"'{instance_family}'."
+        ) from exc
 
 
 def _parse_launch_task_id(taskid: str) -> tuple[str, str, str, str | None]:
@@ -455,7 +484,7 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
                 ) from exc
 
             click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
-        case WorkerCapability.G4DN | WorkerCapability.G3:
+        case _:
             # Do the bench task
             task_db.mark_task_completed(task, success=False)
             click.echo(
@@ -463,7 +492,10 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
             )
 
 
-@cli.command("create-launch-task", help="Create a launch task entry in TaskStatusDB.")
+@cli.command(
+    "create-launch-task",
+    help="Create launch and benchmark task entries in TaskStatusDB.",
+)
 @click.option("--instance-type", required=True, type=str)
 @click.option("--region", default="us-east-1", show_default=True, type=str)
 @click.option("--ami-id", default=DEFAULT_LAUNCH_AMI_ID, show_default=True, type=str)
@@ -478,7 +510,7 @@ def create_launch_task(
     db_path: str | None,
     max_tries: int,
 ) -> None:
-    """Create a launch task entry in TaskStatusDB.
+    """Create launch and benchmark task entries in TaskStatusDB.
 
     Parameters
     ----------
@@ -493,7 +525,7 @@ def create_launch_task(
     db_path : str | None
         Filesystem path to the task status database.
     max_tries : int
-        Maximum total execution attempts for the task.
+        Maximum total execution attempts for each created task.
 
     Raises
     ------
@@ -518,6 +550,8 @@ def create_launch_task(
         normalized_ami_id,
         cloud_init_b64=cloud_init_b64,
     )
+    bench_task_id = f"bench:{task_id}"
+    instance_capability = _resolve_bench_worker_capability(normalized_instance_type)
 
     db_path_label = db_path if db_path is not None else "task_status.db"
 
@@ -528,6 +562,12 @@ def create_launch_task(
             requirements=[],
             max_tries=max_tries,
             capability=WorkerCapability.LAUNCH.value,
+        )
+        task_db.add_task_with_capability(
+            taskid=bench_task_id,
+            requirements=[task_id],
+            max_tries=max_tries,
+            capability=instance_capability.value,
         )
     except Exception as exc:
         raise click.ClickException(
