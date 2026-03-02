@@ -475,6 +475,103 @@ def test_create_launch_task_with_cloud_init_file_embeds_payload(monkeypatch, tmp
     assert expected_taskid in result.output
 
 
+def test_create_launch_task_with_cloud_init_template_injects_turso_values(
+    monkeypatch, tmp_path
+):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    cloud_init_path = tmp_path / "cloud-init.sh"
+    cloud_init_content = (
+        "#!/usr/bin/env bash\n"
+        'export TURSO_DATABASE_URL="@TURSO_DATABASE_URL"\n'
+        'export TURSO_AUTH_TOKEN="@TURSO_AUTH_TOKEN"\n'
+    )
+    cloud_init_path.write_text(cloud_init_content)
+
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://benchmarking-db.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "token-from-template")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region: None,
+    )
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module.uuid,
+        "uuid4",
+        lambda: uuid.UUID("abababab-abab-abab-abab-abababababab"),
+    )
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--cloud-init-file",
+            str(cloud_init_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    rendered_cloud_init = (
+        "#!/usr/bin/env bash\n"
+        'export TURSO_DATABASE_URL="libsql://benchmarking-db.turso.io"\n'
+        'export TURSO_AUTH_TOKEN="token-from-template"\n'
+    )
+    encoded_payload = base64.b64encode(rendered_cloud_init.encode("utf-8")).decode(
+        "ascii"
+    )
+    expected_taskid = (
+        "us-east-1:g5.xlarge:"
+        f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+        f"{encoded_payload}:"
+        "abababab-abab-abab-abab-abababababab"
+    )
+    assert store["tasks"][0]["taskid"] == expected_taskid
+
+
+def test_create_launch_task_with_cloud_init_template_missing_value_returns_error(
+    monkeypatch, tmp_path
+):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    cloud_init_path = tmp_path / "cloud-init.sh"
+    cloud_init_content = (
+        "#!/usr/bin/env bash\n"
+        'export TURSO_DATABASE_URL="@TURSO_DATABASE_URL"\n'
+        'export TURSO_AUTH_TOKEN="@TURSO_AUTH_TOKEN"\n'
+    )
+    cloud_init_path.write_text(cloud_init_content)
+
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://benchmarking-db.turso.io")
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region: None,
+    )
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--cloud-init-file",
+            str(cloud_init_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Missing template value 'TURSO_AUTH_TOKEN'" in result.output
+    assert store["db_paths"] == []
+    assert store["tasks"] == []
+
+
 def test_create_launch_task_with_missing_cloud_init_file_returns_error(monkeypatch):
     runner = CliRunner()
     store = {"db_paths": [], "tasks": []}
