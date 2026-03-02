@@ -8,8 +8,9 @@ import pytest
 from click.testing import CliRunner
 from moto import mock_aws
 
-import benchmarking_orchestration as cli_module
+import benchmarking_orchestration.commands as cli_module
 import benchmarking_orchestration.aws as aws_module
+import benchmarking_orchestration.task_id as task_id_module
 
 
 @pytest.fixture(autouse=True)
@@ -390,7 +391,7 @@ def test_create_launch_task_success_uses_defaults_and_writes_task(monkeypatch):
         monkeypatch.setattr(aws_module.boto3, "client", _moto_boto3_client)
         monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
         monkeypatch.setattr(
-            cli_module.uuid,
+            task_id_module.uuid,
             "uuid4",
             lambda: uuid.UUID("12345678-1234-5678-1234-567812345678"),
         )
@@ -440,7 +441,7 @@ def test_create_launch_task_with_cloud_init_file_embeds_payload(monkeypatch, tmp
     )
     monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
     monkeypatch.setattr(
-        cli_module.uuid,
+        task_id_module.uuid,
         "uuid4",
         lambda: uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
     )
@@ -498,7 +499,7 @@ def test_create_launch_task_with_cloud_init_template_injects_turso_values(
     )
     monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
     monkeypatch.setattr(
-        cli_module.uuid,
+        task_id_module.uuid,
         "uuid4",
         lambda: uuid.UUID("abababab-abab-abab-abab-abababababab"),
     )
@@ -672,7 +673,7 @@ def test_create_launch_task_region_override_is_used(monkeypatch):
         monkeypatch.setattr(aws_module.boto3, "client", _moto_boto3_client)
         monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
         monkeypatch.setattr(
-            cli_module.uuid,
+            task_id_module.uuid,
             "uuid4",
             lambda: uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
         )
@@ -727,7 +728,7 @@ def test_create_launch_task_ami_override_is_used(monkeypatch):
         )
         monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
         monkeypatch.setattr(
-            cli_module.uuid,
+            task_id_module.uuid,
             "uuid4",
             lambda: uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
         )
@@ -797,7 +798,7 @@ def test_create_launch_task_validates_ami_with_normalized_values(monkeypatch):
 
     monkeypatch.setattr(cli_module, "validate_launch_ami", _capture_ami_validation)
     monkeypatch.setattr(
-        cli_module.uuid,
+        task_id_module.uuid,
         "uuid4",
         lambda: uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
     )
