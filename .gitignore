@@ -3,3 +3,4 @@
 !.pixi/config.toml
 __pycache__
 *.db
+.claude
