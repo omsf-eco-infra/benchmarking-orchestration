@@ -50,4 +50,5 @@ system-requirements = {cuda = "12.1"}
 
 [tool.pixi.feature.bench.dependencies]
 openfe = "==1.9.1"
+pandas = ">=2.0,<3"
 

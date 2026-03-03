@@ -2324,7 +2324,7 @@ packages:
 - pypi: ./
   name: benchmarking-orchestration
   version: 0.1.0
-  sha256: b9288416432f0fd152ec6cf28f6dd808939e53ccee95e8c73a5f9159ca3ef6e1
+  sha256: 684fcea02120ad7bcfd791b2da0464f12da95f269f6c222215b5bb0140361eea
   requires_dist:
   - sqlalchemy-libsql>=0.2.0
   requires_python: '>=3.11'
