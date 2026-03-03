@@ -21,4 +21,4 @@ jobs:
           frozen: true
 
       - name: Run tests
-        run: pixi run --environment dev test
+        run: pixi run --environment dev --clean-env test
