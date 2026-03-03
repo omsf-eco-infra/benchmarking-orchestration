@@ -24,6 +24,7 @@ from .normalization import (
     _normalize_instance_type,
     _normalize_region,
 )
+from .bench import run_benchmark
 from .task_id import _build_task_id, _parse_launch_task_id
 from .tasks import TaskStatusDB
 
@@ -124,12 +125,16 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
                 if cloud_init_b64 is not None:
                     cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
                 ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
+                instance_profile_name = (
+                    os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
+                )
                 instance_id = launch_ec2_instance(
                     task_instance_type,
                     ami_id=task_ami_id,
                     region=task_region,
                     user_data=cloud_init_user_data,
                     key_name=ec2_key_name,
+                    instance_profile_name=instance_profile_name,
                 )
             except Exception as exc:
                 try:
@@ -153,10 +158,46 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
 
             click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
         case _:
-            # Do the bench task
-            task_db.mark_task_completed(task, success=False)
+            # Run the benchmark workload then report results.
+            s3_bucket = os.environ.get("S3_BUCKET")
+            if not s3_bucket:
+                try:
+                    task_db.mark_task_completed(task, success=False)
+                except Exception:
+                    pass
+                raise click.ClickException(
+                    "S3_BUCKET environment variable is required for bench tasks."
+                )
+
+            bench_repo = Path.home() / "performance_benchmarks"
+            try:
+                run_benchmark(
+                    benchmark_repo_path=bench_repo,
+                    s3_bucket=s3_bucket,
+                    task_id=task,
+                )
+            except Exception as exc:
+                try:
+                    task_db.mark_task_completed(task, success=False)
+                except Exception as mark_exc:
+                    raise click.ClickException(
+                        f"Bench task '{task}' failed and could not be marked as failed "
+                        f"in database '{db_path_label}': {mark_exc}. Original error: {exc}"
+                    ) from exc
+                raise click.ClickException(
+                    f"Bench task '{task}' failed: {exc}"
+                ) from exc
+
+            try:
+                task_db.mark_task_completed(task, success=True)
+            except Exception as exc:
+                raise click.ClickException(
+                    f"Bench task '{task}' completed but could not be marked as succeeded "
+                    f"in database '{db_path_label}': {exc}"
+                ) from exc
+
             click.echo(
-                f"Processed bench task '{task}' with capability '{capability.value}'"
+                f"Processed bench task '{task}' with capability '{capability.value}'."
             )
 
 
@@ -170,6 +211,14 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
 @click.option("--cloud-init-file", default=None, type=str)
 @click.option("--db-path", default=None, show_default=False, type=str)
 @click.option("--max-tries", default=1, show_default=True, type=click.IntRange(min=1))
+@click.option(
+    "--s3-bucket",
+    default=None,
+    show_default=False,
+    type=str,
+    envvar="BENCHMARK_S3_BUCKET",
+    help="S3 bucket for benchmark result uploads (or set BENCHMARK_S3_BUCKET env var).",
+)
 def create_launch_task(
     instance_type: str,
     region: str,
@@ -177,6 +226,7 @@ def create_launch_task(
     cloud_init_file: str | None,
     db_path: str | None,
     max_tries: int,
+    s3_bucket: str | None,
 ) -> None:
     """Create launch and benchmark task entries in TaskStatusDB.
 
@@ -194,6 +244,9 @@ def create_launch_task(
         Filesystem path to the task status database.
     max_tries : int
         Maximum total execution attempts for each created task.
+    s3_bucket : str, optional
+        S3 bucket name injected into the cloud-init template as ``S3_BUCKET``.
+        Falls back to the ``BENCHMARK_S3_BUCKET`` environment variable.
 
     Raises
     ------
@@ -211,9 +264,12 @@ def create_launch_task(
         raise click.ClickException(str(exc)) from exc
 
     instance_capability = _resolve_bench_worker_capability(normalized_instance_type)
+    extra_vars: dict[str, str] = {"GPU_CAPABILITY": instance_capability.value}
+    if s3_bucket is not None:
+        extra_vars["S3_BUCKET"] = s3_bucket
     cloud_init_b64 = _read_cloud_init_file_as_base64(
         cloud_init_file,
-        extra_vars={"GPU_CAPABILITY": instance_capability.value},
+        extra_vars=extra_vars,
     )
 
     task_id = _build_task_id(

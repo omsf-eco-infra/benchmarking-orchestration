@@ -244,6 +244,7 @@ def launch_ec2_instance(
     region: str = "us-east-1",
     user_data: str | None = None,
     key_name: str | None = None,
+    instance_profile_name: str | None = None,
     ec2_client: Any = None,
 ) -> str:
     """Launch a single EC2 instance and return its instance ID.
@@ -303,6 +304,8 @@ def launch_ec2_instance(
         run_instances_kwargs["UserData"] = user_data
     if key_name is not None:
         run_instances_kwargs["KeyName"] = key_name
+    if instance_profile_name is not None:
+        run_instances_kwargs["IamInstanceProfile"] = {"Name": instance_profile_name}
 
     try:
         response = ec2.run_instances(**run_instances_kwargs)
