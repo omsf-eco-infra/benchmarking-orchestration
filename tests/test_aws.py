@@ -367,3 +367,32 @@ def test_launch_ec2_instance_omits_user_data_when_not_provided():
 
     assert len(client.run_instances_calls) == 1
     assert "UserData" not in client.run_instances_calls[0]
+
+
+def test_launch_ec2_instance_passes_key_name_when_provided():
+    client = _CaptureRunInstancesClient()
+
+    launch_ec2_instance(
+        "g5.xlarge",
+        ami_id="ami-0ec16471888b25545",
+        region="us-east-1",
+        key_name="my-test-key",
+        ec2_client=client,
+    )
+
+    assert len(client.run_instances_calls) == 1
+    assert client.run_instances_calls[0]["KeyName"] == "my-test-key"
+
+
+def test_launch_ec2_instance_omits_key_name_when_not_provided():
+    client = _CaptureRunInstancesClient()
+
+    launch_ec2_instance(
+        "g5.xlarge",
+        ami_id="ami-0ec16471888b25545",
+        region="us-east-1",
+        ec2_client=client,
+    )
+
+    assert len(client.run_instances_calls) == 1
+    assert "KeyName" not in client.run_instances_calls[0]
