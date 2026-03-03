@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-apt-get install -y git
-
 TURSO_DATABASE_URL="@TURSO_DATABASE_URL"
 TURSO_AUTH_TOKEN="@TURSO_AUTH_TOKEN"
-GPU_CAPABILITY="${gpu:-${GPU_CAPABILITY:-}}"
+GPU_CAPABILITY="@GPU_CAPABILITY"
 
 : "${TURSO_DATABASE_URL:?TURSO_DATABASE_URL is required}"
 : "${TURSO_AUTH_TOKEN:?TURSO_AUTH_TOKEN is required}"
-: "${GPU_CAPABILITY:?GPU capability is required}"
+: "${GPU_CAPABILITY:?GPU_CAPABILITY is required}"
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y git
 
 sudo -u ubuntu -i bash <<EOF
 set -euo pipefail
 
-curl -fsSL https://pixi.sh/install.sh | sh
+curl -fsSL https://pixi.sh/install.sh | bash
 export PATH="\$HOME/.pixi/bin:\$PATH"
 
 git clone https://github.com/omsf-eco-infra/benchmarking-orchestration.git

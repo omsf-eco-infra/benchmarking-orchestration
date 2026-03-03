@@ -123,11 +123,13 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
                 cloud_init_user_data = None
                 if cloud_init_b64 is not None:
                     cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
+                ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
                 instance_id = launch_ec2_instance(
                     task_instance_type,
                     ami_id=task_ami_id,
                     region=task_region,
                     user_data=cloud_init_user_data,
+                    key_name=ec2_key_name,
                 )
             except Exception as exc:
                 try:
@@ -208,8 +210,11 @@ def create_launch_task(
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
-    # TODO: Modify this to work on strings rather than files
-    cloud_init_b64 = _read_cloud_init_file_as_base64(cloud_init_file)
+    instance_capability = _resolve_bench_worker_capability(normalized_instance_type)
+    cloud_init_b64 = _read_cloud_init_file_as_base64(
+        cloud_init_file,
+        extra_vars={"GPU_CAPABILITY": instance_capability.value},
+    )
 
     task_id = _build_task_id(
         normalized_region,
@@ -218,7 +223,6 @@ def create_launch_task(
         cloud_init_b64=cloud_init_b64,
     )
     bench_task_id = f"bench:{task_id}"
-    instance_capability = _resolve_bench_worker_capability(normalized_instance_type)
 
     db_path_label = db_path if db_path is not None else "task_status.db"
 

@@ -91,13 +91,19 @@ def _fill_cloud_init_template(cloud_init_file: Path, **kwargs) -> str:
         ) from exc
 
 
-def _read_cloud_init_file_as_base64(cloud_init_file: str | None) -> str | None:
+def _read_cloud_init_file_as_base64(
+    cloud_init_file: str | None,
+    extra_vars: dict[str, str] | None = None,
+) -> str | None:
     """Read a cloud-init file and return a base64 payload.
 
     Parameters
     ----------
     cloud_init_file : str, optional
         Path to a cloud-init file.
+    extra_vars : dict, optional
+        Additional template variable overrides merged on top of the
+        environment-variable defaults (e.g. ``{"GPU_CAPABILITY": "g4dn"}``).
 
     Returns
     -------
@@ -119,6 +125,8 @@ def _read_cloud_init_file_as_base64(cloud_init_file: str | None) -> str | None:
         template_values["turso_database_url"] = template_values["TURSO_DATABASE_URL"]
     if "TURSO_AUTH_TOKEN" in template_values:
         template_values["turso_auth_token"] = template_values["TURSO_AUTH_TOKEN"]
+    if extra_vars:
+        template_values.update(extra_vars)
 
     rendered_cloud_init = _fill_cloud_init_template(file_path, **template_values)
     file_bytes = rendered_cloud_init.encode("utf-8")

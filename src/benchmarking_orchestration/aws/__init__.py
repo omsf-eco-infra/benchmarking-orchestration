@@ -243,6 +243,7 @@ def launch_ec2_instance(
     ami_id: str = DEFAULT_LAUNCH_AMI_ID,
     region: str = "us-east-1",
     user_data: str | None = None,
+    key_name: str | None = None,
     ec2_client: Any = None,
 ) -> str:
     """Launch a single EC2 instance and return its instance ID.
@@ -257,6 +258,11 @@ def launch_ec2_instance(
         AWS region where the launch should occur.
     user_data : str, optional
         Cloud-init user-data content to pass to EC2 at launch time.
+    key_name : str, optional
+        Name of an AWS-registered EC2 key pair to associate with the
+        instance, enabling SSH access. When ``None``, no key pair is
+        attached. Intended for testing and debugging; production workers
+        are expected to be fully autonomous via ``user_data``.
     ec2_client : Any, optional
         Boto3 EC2 client (or compatible test double). When ``None``,
         a client is created from ``boto3``.
@@ -295,6 +301,8 @@ def launch_ec2_instance(
     }
     if user_data is not None:
         run_instances_kwargs["UserData"] = user_data
+    if key_name is not None:
+        run_instances_kwargs["KeyName"] = key_name
 
     try:
         response = ec2.run_instances(**run_instances_kwargs)
