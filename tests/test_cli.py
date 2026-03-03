@@ -126,7 +126,12 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
     def _fake_launch_ec2_instance(
-        instance_type, ami_id, region, user_data=None, key_name=None
+        instance_type,
+        ami_id,
+        region,
+        user_data=None,
+        key_name=None,
+        instance_profile_name=None,
     ):
         store["launch_calls"].append(
             {
@@ -135,6 +140,7 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
                 "region": region,
                 "user_data": user_data,
                 "key_name": key_name,
+                "instance_profile_name": instance_profile_name,
             }
         )
         return "i-1234567890abcdef0"
@@ -153,6 +159,7 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
             "region": "us-east-1",
             "user_data": None,
             "key_name": None,
+            "instance_profile_name": None,
         }
     ]
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
@@ -181,9 +188,9 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None: (
-            _ for _ in ()
-        ).throw(RuntimeError("boom")),
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+            (_ for _ in ()).throw(RuntimeError("boom"))
+        ),
     )
     result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
@@ -213,10 +220,12 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None: (
-            _ for _ in ()
-        ).throw(
-            AssertionError("launch helper should not be called for malformed task ID")
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+            (_ for _ in ()).throw(
+                AssertionError(
+                    "launch helper should not be called for malformed task ID"
+                )
+            )
         ),
     )
     result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
@@ -246,11 +255,11 @@ def test_worker_marks_failure_for_legacy_three_part_taskid(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None: (
-            _ for _ in ()
-        ).throw(
-            AssertionError(
-                "launch helper should not be called for legacy 3-part task ID"
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+            (_ for _ in ()).throw(
+                AssertionError(
+                    "launch helper should not be called for legacy 3-part task ID"
+                )
             )
         ),
     )
@@ -285,7 +294,12 @@ def test_worker_launches_task_with_cloud_init_payload(monkeypatch):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
     def _fake_launch_ec2_instance(
-        instance_type, ami_id, region, user_data=None, key_name=None
+        instance_type,
+        ami_id,
+        region,
+        user_data=None,
+        key_name=None,
+        instance_profile_name=None,
     ):
         store["launch_calls"].append(
             {
@@ -294,6 +308,7 @@ def test_worker_launches_task_with_cloud_init_payload(monkeypatch):
                 "region": region,
                 "user_data": user_data,
                 "key_name": key_name,
+                "instance_profile_name": instance_profile_name,
             }
         )
         return "i-1234567890abcdef0"
@@ -311,6 +326,7 @@ def test_worker_launches_task_with_cloud_init_payload(monkeypatch):
             "region": "us-east-1",
             "user_data": cloud_init_text,
             "key_name": None,
+            "instance_profile_name": None,
         }
     ]
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
@@ -340,11 +356,11 @@ def test_worker_marks_failure_when_cloud_init_payload_is_invalid(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None: (
-            _ for _ in ()
-        ).throw(
-            AssertionError(
-                "launch helper should not run for invalid cloud-init payload"
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+            (_ for _ in ()).throw(
+                AssertionError(
+                    "launch helper should not run for invalid cloud-init payload"
+                )
             )
         ),
     )
@@ -882,7 +898,12 @@ def test_worker_passes_ec2_key_name_env_var_to_launch(monkeypatch):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
     def _fake_launch_ec2_instance(
-        instance_type, ami_id, region, user_data=None, key_name=None
+        instance_type,
+        ami_id,
+        region,
+        user_data=None,
+        key_name=None,
+        instance_profile_name=None,
     ):
         store["launch_calls"].append({"key_name": key_name})
         return "i-1234567890abcdef0"
@@ -917,7 +938,12 @@ def test_worker_omits_key_name_when_ec2_key_name_env_var_not_set(monkeypatch):
             store["mark_calls"].append({"taskid": taskid_value, "success": success})
 
     def _fake_launch_ec2_instance(
-        instance_type, ami_id, region, user_data=None, key_name=None
+        instance_type,
+        ami_id,
+        region,
+        user_data=None,
+        key_name=None,
+        instance_profile_name=None,
     ):
         store["launch_calls"].append({"key_name": key_name})
         return "i-1234567890abcdef0"
@@ -930,6 +956,269 @@ def test_worker_omits_key_name_when_ec2_key_name_env_var_not_set(monkeypatch):
 
     assert result.exit_code == 0
     assert store["launch_calls"] == [{"key_name": None}]
+    assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
+
+
+def test_worker_bench_task_calls_run_benchmark_and_marks_success(monkeypatch):
+    runner = CliRunner()
+    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": [], "bench_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_run_benchmark(benchmark_repo_path, s3_bucket, task_id):
+        store["bench_calls"].append(
+            {
+                "benchmark_repo_path": benchmark_repo_path,
+                "s3_bucket": s3_bucket,
+                "task_id": task_id,
+            }
+        )
+
+    monkeypatch.setenv("S3_BUCKET", "test-results-bucket")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "run_benchmark", _fake_run_benchmark)
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "g5"])
+
+    assert result.exit_code == 0, result.output
+    assert len(store["bench_calls"]) == 1
+    call = store["bench_calls"][0]
+    assert call["s3_bucket"] == "test-results-bucket"
+    assert call["task_id"] == taskid
+    assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
+    assert "Processed bench task" in result.output
+
+
+def test_worker_bench_task_marks_failure_when_run_benchmark_raises(monkeypatch):
+    runner = CliRunner()
+    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    monkeypatch.setenv("S3_BUCKET", "test-results-bucket")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(
+        cli_module,
+        "run_benchmark",
+        lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("RBFE benchmark failed: CUDA not available")
+        ),
+    )
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "g5"])
+
+    assert result.exit_code != 0
+    assert "Bench task" in result.output
+    assert "failed" in result.output
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
+
+
+def test_worker_bench_task_fails_when_s3_bucket_not_set(monkeypatch):
+    runner = CliRunner()
+    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "g5"])
+
+    assert result.exit_code != 0
+    assert "S3_BUCKET" in result.output
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
+
+
+def test_create_launch_task_injects_s3_bucket_into_cloud_init_template(
+    monkeypatch, tmp_path
+):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    cloud_init_path = tmp_path / "cloud-init.sh"
+    cloud_init_content = (
+        "#!/usr/bin/env bash\n"
+        'TURSO_DATABASE_URL="@TURSO_DATABASE_URL"\n'
+        'TURSO_AUTH_TOKEN="@TURSO_AUTH_TOKEN"\n'
+        'GPU_CAPABILITY="@GPU_CAPABILITY"\n'
+        'S3_BUCKET="@S3_BUCKET"\n'
+    )
+    cloud_init_path.write_text(cloud_init_content)
+
+    monkeypatch.setenv("TURSO_DATABASE_URL", "libsql://bench.turso.io")
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", "tok")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module, "validate_launch_instance_type", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda *a, **kw: None)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--cloud-init-file",
+            str(cloud_init_path),
+            "--s3-bucket",
+            "my-benchmark-results",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(store["tasks"]) == 2
+    # The encoded cloud-init in the task ID must contain the rendered S3_BUCKET value
+    task_id = store["tasks"][0]["taskid"]
+    # Extract the base64 segment (4th colon-separated field)
+    parts = task_id.split(":")
+    import base64
+
+    rendered = base64.b64decode(parts[3]).decode("utf-8")
+    assert 'S3_BUCKET="my-benchmark-results"' in rendered
+
+
+def test_create_launch_task_reads_s3_bucket_from_env_var(monkeypatch, tmp_path):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+    cloud_init_path = tmp_path / "cloud-init.sh"
+    cloud_init_path.write_text(
+        'S3_BUCKET="@S3_BUCKET"\nGPU_CAPABILITY="@GPU_CAPABILITY"\n'
+    )
+
+    monkeypatch.setenv("BENCHMARK_S3_BUCKET", "env-bucket")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module, "validate_launch_instance_type", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda *a, **kw: None)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "create-launch-task",
+            "--instance-type",
+            "g5.xlarge",
+            "--cloud-init-file",
+            str(cloud_init_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    task_id = store["tasks"][0]["taskid"]
+    parts = task_id.split(":")
+    import base64
+
+    rendered = base64.b64decode(parts[3]).decode("utf-8")
+    assert 'S3_BUCKET="env-bucket"' in rendered
+
+
+def test_worker_passes_iam_instance_profile_env_var_to_launch(monkeypatch):
+    runner = CliRunner()
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    )
+    store = {"launch_calls": [], "mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_launch_ec2_instance(
+        instance_type,
+        ami_id,
+        region,
+        user_data=None,
+        key_name=None,
+        instance_profile_name=None,
+    ):
+        store["launch_calls"].append({"instance_profile_name": instance_profile_name})
+        return "i-1234567890abcdef0"
+
+    monkeypatch.setenv("EC2_IAM_INSTANCE_PROFILE", "my-bench-role")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
+
+    assert result.exit_code == 0
+    assert store["launch_calls"] == [{"instance_profile_name": "my-bench-role"}]
+    assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
+
+
+def test_worker_omits_iam_instance_profile_when_env_var_not_set(monkeypatch):
+    runner = CliRunner()
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    )
+    store = {"launch_calls": [], "mark_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_launch_ec2_instance(
+        instance_type,
+        ami_id,
+        region,
+        user_data=None,
+        key_name=None,
+        instance_profile_name=None,
+    ):
+        store["launch_calls"].append({"instance_profile_name": instance_profile_name})
+        return "i-1234567890abcdef0"
+
+    monkeypatch.delenv("EC2_IAM_INSTANCE_PROFILE", raising=False)
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
+
+    assert result.exit_code == 0
+    assert store["launch_calls"] == [{"instance_profile_name": None}]
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
 
 
