@@ -11,7 +11,7 @@ Practical guidance for coding agents working in this repository.
 
 ## Testing
 - Run the full unit test suite:
-  - `pixi run --environment dev test`
+  - `pixi run --environment dev --clean-env test`
 
 ## Formatting
 - `pixi run fmt`
