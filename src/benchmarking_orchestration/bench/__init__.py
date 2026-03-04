@@ -62,7 +62,8 @@ def run_benchmark(
     finally:
         sys.path.pop(0)
 
-    s3_prefix = task_id.replace(":", "/")
+    # s3_prefix = task_id.replace(":", "/")
+    s3_prefix = "test"
     s3_client = boto3.client("s3")
 
     with tempfile.TemporaryDirectory() as tmpdir:
