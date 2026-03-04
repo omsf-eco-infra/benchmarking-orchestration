@@ -58,7 +58,7 @@ def run_benchmark(
     sys.path.insert(0, str(benchmark_dir))
     try:
         import md_benchmark
-        import rbfe_benchmark
+        # import rbfe_benchmark
     finally:
         sys.path.pop(0)
 
@@ -68,15 +68,15 @@ def run_benchmark(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
 
-        rbfe_out = tmpdir_path / "rbfe_benchmark.out"
-        try:
-            rbfe_benchmark.run_benchmark.main(
-                ["--input_file", str(input_file), "--output_file", str(rbfe_out)],
-                standalone_mode=False,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"RBFE benchmark failed: {exc}") from exc
-
+        # rbfe_out = tmpdir_path / "rbfe_benchmark.out"
+        # try:
+        #     rbfe_benchmark.run_benchmark.main(
+        #         ["--input_file", str(input_file), "--output_file", str(rbfe_out)],
+        #         standalone_mode=False,
+        #     )
+        # except Exception as exc:
+        #     raise RuntimeError(f"RBFE benchmark failed: {exc}") from exc
+        #
         md_out = tmpdir_path / "md_benchmark.out"
         try:
             md_benchmark.run_benchmark.main(
@@ -86,6 +86,5 @@ def run_benchmark(
         except Exception as exc:
             raise RuntimeError(f"MD benchmark failed: {exc}") from exc
 
-        for out_file in (rbfe_out, md_out):
-            s3_key = f"{s3_prefix}/{out_file.name}"
-            s3_client.upload_file(str(out_file), s3_bucket, s3_key)
+        s3_key = f"{s3_prefix}/{md_out.name}"
+        s3_client.upload_file(str(md_out), s3_bucket, s3_key)
