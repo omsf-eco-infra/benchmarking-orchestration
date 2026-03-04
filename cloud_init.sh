@@ -13,7 +13,7 @@ S3_BUCKET="@S3_BUCKET"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y git
+apt-get install -y git nvtop
 
 sudo -u ubuntu -i bash <<EOF
 set -euo pipefail
