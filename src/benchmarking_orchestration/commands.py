@@ -5,12 +5,6 @@ from pathlib import Path
 
 import click
 
-from .aws import (
-    DEFAULT_LAUNCH_AMI_ID,
-    launch_ec2_instance,
-    validate_launch_ami,
-    validate_launch_instance_type,
-)
 from .capabilities import (
     WorkerCapability,
     _parse_worker_capability,
@@ -22,7 +16,15 @@ from .normalization import (
     _normalize_ami_id,
     _normalize_db_path,
     _normalize_instance_type,
+    _normalize_required_value,
     _normalize_region,
+)
+from .providers import (
+    DEFAULT_LAUNCH_AMI_ID,
+    DEFAULT_PROVIDER_NAME,
+    LaunchSpec,
+    get_provider,
+    _provider_choices,
 )
 from .bench import run_benchmark
 from .task_id import _build_task_id, _parse_launch_task_id
@@ -65,6 +67,108 @@ def _setup_task_status_db(db_path: str | None) -> TaskStatusDB:
     return TaskStatusDB.from_filename(normalized_db_path)
 
 
+def _normalize_provider_name(provider_name: str) -> str:
+    """Normalize and lowercase a provider selector.
+
+    Parameters
+    ----------
+    provider_name : str
+        Raw provider value from CLI input.
+
+    Returns
+    -------
+    str
+        Normalized provider value.
+    """
+    return _normalize_required_value("provider", provider_name).lower()
+
+
+def validate_launch_instance_type(
+    instance_type: str,
+    region: str = "us-east-1",
+    provider_name: str = DEFAULT_PROVIDER_NAME,
+) -> None:
+    """Validate launch instance-type fields through the selected provider.
+
+    Parameters
+    ----------
+    instance_type : str
+        Instance type or shape identifier.
+    region : str, default="us-east-1"
+        Provider region used for validation.
+    provider_name : str, default="aws"
+        Provider selector.
+    """
+    provider = get_provider(provider_name)
+    provider.validate_spec(LaunchSpec(instance_type=instance_type, region=region))
+
+
+def validate_launch_ami(
+    ami_id: str,
+    region: str = "us-east-1",
+    provider_name: str = DEFAULT_PROVIDER_NAME,
+) -> None:
+    """Validate launch image fields through the selected provider.
+
+    Parameters
+    ----------
+    ami_id : str
+        Image identifier to validate.
+    region : str, default="us-east-1"
+        Provider region used for validation.
+    provider_name : str, default="aws"
+        Provider selector.
+    """
+    provider = get_provider(provider_name)
+    provider.validate_spec(LaunchSpec(ami_id=ami_id, region=region))
+
+
+def launch_ec2_instance(
+    instance_type: str,
+    ami_id: str = DEFAULT_LAUNCH_AMI_ID,
+    region: str = "us-east-1",
+    user_data: str | None = None,
+    key_name: str | None = None,
+    instance_profile_name: str | None = None,
+    provider_name: str = DEFAULT_PROVIDER_NAME,
+) -> str:
+    """Submit a launch request through the selected provider.
+
+    Parameters
+    ----------
+    instance_type : str
+        Instance type or shape identifier.
+    ami_id : str, default=DEFAULT_LAUNCH_AMI_ID
+        Image identifier for launch.
+    region : str, default="us-east-1"
+        Provider region for launch.
+    user_data : str, optional
+        Startup script payload.
+    key_name : str, optional
+        Optional SSH key pair name.
+    instance_profile_name : str, optional
+        Optional provider identity/profile attachment name.
+    provider_name : str, default="aws"
+        Provider selector.
+
+    Returns
+    -------
+    str
+        Provider launch handle.
+    """
+    provider = get_provider(provider_name)
+    return provider.submit(
+        LaunchSpec(
+            instance_type=instance_type,
+            ami_id=ami_id,
+            region=region,
+            user_data=user_data,
+            key_name=key_name,
+            instance_profile_name=instance_profile_name,
+        )
+    )
+
+
 @click.group(
     invoke_without_command=True,
     help="CLI for benchmarking task orchestration.",
@@ -90,17 +194,27 @@ def cli(ctx: click.Context) -> None:
     callback=_parse_worker_capability,
     help="Worker capability to execute.",
 )
+@click.option(
+    "--provider",
+    default=DEFAULT_PROVIDER_NAME,
+    show_default=True,
+    type=click.Choice(_provider_choices(), case_sensitive=False),
+    help="Compute provider used for launch tasks.",
+)
 @click.option("--db-path", default=None, type=str)
-def worker(capability: WorkerCapability, db_path: str) -> None:
+def worker(capability: WorkerCapability, provider: str, db_path: str) -> None:
     """Run a worker with a selected capability.
 
     Parameters
     ----------
     capability : WorkerCapability
         Worker capability used to select which tasks to process.
+    provider : str
+        Compute provider used for launch tasks.
     db_path : str
         Optional filesystem path to the task status database.
     """
+    normalized_provider = _normalize_provider_name(provider)
     db_path_label = db_path if db_path is not None else "task_status.db"
 
     try:
@@ -135,6 +249,7 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
                     user_data=cloud_init_user_data,
                     key_name=ec2_key_name,
                     instance_profile_name=instance_profile_name,
+                    provider_name=normalized_provider,
                 )
             except Exception as exc:
                 try:
@@ -209,6 +324,13 @@ def worker(capability: WorkerCapability, db_path: str) -> None:
 @click.option("--region", default="us-east-1", show_default=True, type=str)
 @click.option("--ami-id", default=DEFAULT_LAUNCH_AMI_ID, show_default=True, type=str)
 @click.option("--cloud-init-file", default=None, type=str)
+@click.option(
+    "--provider",
+    default=DEFAULT_PROVIDER_NAME,
+    show_default=True,
+    type=click.Choice(_provider_choices(), case_sensitive=False),
+    help="Compute provider used for launch task orchestration.",
+)
 @click.option("--db-path", default=None, show_default=False, type=str)
 @click.option("--max-tries", default=1, show_default=True, type=click.IntRange(min=1))
 @click.option(
@@ -224,6 +346,7 @@ def create_launch_task(
     region: str,
     ami_id: str,
     cloud_init_file: str | None,
+    provider: str,
     db_path: str | None,
     max_tries: int,
     s3_bucket: str | None,
@@ -240,6 +363,8 @@ def create_launch_task(
         AMI identifier recorded with task launch metadata.
     cloud_init_file : str, optional
         Cloud-init file path to encode and store with task launch metadata.
+    provider : str
+        Compute provider used for launch validation and submission.
     db_path : str | None
         Filesystem path to the task status database.
     max_tries : int
@@ -256,10 +381,19 @@ def create_launch_task(
     normalized_instance_type = _normalize_instance_type(instance_type)
     normalized_region = _normalize_region(region)
     normalized_ami_id = _normalize_ami_id(ami_id)
+    normalized_provider = _normalize_provider_name(provider)
 
     try:
-        validate_launch_instance_type(normalized_instance_type, normalized_region)
-        validate_launch_ami(normalized_ami_id, normalized_region)
+        validate_launch_instance_type(
+            normalized_instance_type,
+            normalized_region,
+            provider_name=normalized_provider,
+        )
+        validate_launch_ami(
+            normalized_ami_id,
+            normalized_region,
+            provider_name=normalized_provider,
+        )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
