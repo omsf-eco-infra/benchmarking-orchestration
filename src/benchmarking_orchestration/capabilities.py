@@ -12,6 +12,7 @@ class WorkerCapability(StrEnum):
     G3 = "g3"
     G4DN = "g4dn"
     G5 = "g5"
+    P = "p"
     VT1 = "vt1"
 
 
@@ -45,6 +46,8 @@ def _resolve_bench_worker_capability(instance_type: str) -> WorkerCapability:
         If the instance family does not map to a supported worker capability.
     """
     instance_family = instance_type.split(".", maxsplit=1)[0]
+    if instance_family.startswith("p"):
+        return WorkerCapability.P
     try:
         return WorkerCapability(instance_family)
     except ValueError as exc:

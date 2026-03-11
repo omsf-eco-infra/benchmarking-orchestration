@@ -40,6 +40,24 @@ def _is_ondemand_g_or_vt_instance_type(instance_type: str) -> bool:
     return lower.startswith("g") or lower.startswith("vt")
 
 
+def _is_launch_supported_instance_type(instance_type: str) -> bool:
+    """Check whether an instance type is in a supported launch family.
+
+    Parameters
+    ----------
+    instance_type : str
+        EC2 instance type identifier (for example, ``g5.xlarge``).
+
+    Returns
+    -------
+    bool
+        ``True`` when the type starts with ``g``, ``vt``, or ``p``,
+        otherwise ``False``.
+    """
+    lower = instance_type.lower()
+    return lower.startswith("g") or lower.startswith("vt") or lower.startswith("p")
+
+
 def _chunked(items: list[str], size: int) -> Iterable[list[str]]:
     """Yield fixed-size chunks from a list.
 
@@ -118,7 +136,7 @@ def _resolve_vcpus_by_instance_type(
 def validate_launch_instance_type(
     instance_type: str, region: str = "us-east-1", ec2_client: Any = None
 ) -> None:
-    """Validate that a launch instance type is G/VT and exists in AWS.
+    """Validate that a launch instance type is G/VT/P and exists in AWS.
 
     Parameters
     ----------
@@ -133,7 +151,7 @@ def validate_launch_instance_type(
     Raises
     ------
     ValueError
-        If the provided instance type is empty or outside G/VT families.
+        If the provided instance type is empty or outside G/VT/P families.
     RuntimeError
         If AWS validation fails or the type is unavailable in region.
     """
@@ -141,9 +159,9 @@ def validate_launch_instance_type(
     if not normalized:
         raise ValueError("instance type cannot be empty.")
 
-    if not _is_ondemand_g_or_vt_instance_type(normalized):
+    if not _is_launch_supported_instance_type(normalized):
         raise ValueError(
-            "Instance type must be in the G/VT family (start with 'g' or 'vt')."
+            "Instance type must be in the G/VT/P family (start with 'g', 'vt', or 'p')."
         )
 
     ec2 = ec2_client or boto3.client("ec2", region_name=region)
