@@ -23,7 +23,11 @@ def _aws_credentials(monkeypatch):
 
 
 def _stub_ami_validation(monkeypatch):
-    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
 
 
 def _build_fake_task_db(store):
@@ -100,6 +104,27 @@ def test_worker_capability_is_case_insensitive(monkeypatch):
     assert store["checkout_caps"] == ["launch"]
 
 
+def test_worker_accepts_p_capability(monkeypatch):
+    runner = CliRunner()
+    store = {"checkout_caps": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            store["checkout_caps"].append(capability)
+            return None
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "P"])
+
+    assert result.exit_code == 0
+    assert store["checkout_caps"] == ["p"]
+    assert "No available p tasks." in result.output
+
+
 def test_worker_launches_task_and_marks_success(monkeypatch):
     runner = CliRunner()
     taskid = (
@@ -132,6 +157,7 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
         user_data=None,
         key_name=None,
         instance_profile_name=None,
+        provider_name="aws",
     ):
         store["launch_calls"].append(
             {
@@ -147,6 +173,8 @@ def test_worker_launches_task_and_marks_success(monkeypatch):
 
     monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
     monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
+    monkeypatch.delenv("EC2_KEY_NAME", raising=False)
+    monkeypatch.delenv("EC2_IAM_INSTANCE_PROFILE", raising=False)
     result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
     assert result.exit_code == 0
@@ -188,7 +216,7 @@ def test_worker_marks_failure_when_launch_raises(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None, provider_name="aws": (
             (_ for _ in ()).throw(RuntimeError("boom"))
         ),
     )
@@ -220,7 +248,7 @@ def test_worker_marks_failure_when_taskid_is_malformed(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None, provider_name="aws": (
             (_ for _ in ()).throw(
                 AssertionError(
                     "launch helper should not be called for malformed task ID"
@@ -255,7 +283,7 @@ def test_worker_marks_failure_for_legacy_three_part_taskid(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None, provider_name="aws": (
             (_ for _ in ()).throw(
                 AssertionError(
                     "launch helper should not be called for legacy 3-part task ID"
@@ -300,6 +328,7 @@ def test_worker_launches_task_with_cloud_init_payload(monkeypatch):
         user_data=None,
         key_name=None,
         instance_profile_name=None,
+        provider_name="aws",
     ):
         store["launch_calls"].append(
             {
@@ -315,6 +344,8 @@ def test_worker_launches_task_with_cloud_init_payload(monkeypatch):
 
     monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
     monkeypatch.setattr(cli_module, "launch_ec2_instance", _fake_launch_ec2_instance)
+    monkeypatch.delenv("EC2_KEY_NAME", raising=False)
+    monkeypatch.delenv("EC2_IAM_INSTANCE_PROFILE", raising=False)
 
     result = runner.invoke(cli_module.cli, ["worker", "--capability", "launch"])
 
@@ -356,7 +387,7 @@ def test_worker_marks_failure_when_cloud_init_payload_is_invalid(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "launch_ec2_instance",
-        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None: (
+        lambda instance_type, ami_id, region, user_data=None, key_name=None, instance_profile_name=None, provider_name="aws": (
             (_ for _ in ()).throw(
                 AssertionError(
                     "launch helper should not run for invalid cloud-init payload"
@@ -467,9 +498,13 @@ def test_create_launch_task_with_cloud_init_file_embeds_payload(monkeypatch, tmp
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: None,
+        lambda instance_type, region, provider_name="aws": None,
     )
-    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
     monkeypatch.setattr(
         task_id_module.uuid,
         "uuid4",
@@ -525,9 +560,13 @@ def test_create_launch_task_with_cloud_init_template_injects_turso_values(
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: None,
+        lambda instance_type, region, provider_name="aws": None,
     )
-    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
     monkeypatch.setattr(
         task_id_module.uuid,
         "uuid4",
@@ -582,9 +621,13 @@ def test_create_launch_task_with_cloud_init_template_missing_value_returns_error
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: None,
+        lambda instance_type, region, provider_name="aws": None,
     )
-    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
 
     result = runner.invoke(
         cli_module.cli,
@@ -611,9 +654,13 @@ def test_create_launch_task_with_missing_cloud_init_file_returns_error(monkeypat
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: None,
+        lambda instance_type, region, provider_name="aws": None,
     )
-    monkeypatch.setattr(cli_module, "validate_launch_ami", lambda ami_id, region: None)
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
 
     result = runner.invoke(
         cli_module.cli,
@@ -632,7 +679,9 @@ def test_create_launch_task_with_missing_cloud_init_file_returns_error(monkeypat
     assert store["tasks"] == []
 
 
-def test_create_launch_task_rejects_non_g_or_vt_without_aws_or_db_calls(monkeypatch):
+def test_create_launch_task_rejects_non_g_or_vt_or_p_without_aws_or_db_calls(
+    monkeypatch,
+):
     runner = CliRunner()
     store = {"db_paths": [], "tasks": []}
     boto3_calls = []
@@ -640,7 +689,7 @@ def test_create_launch_task_rejects_non_g_or_vt_without_aws_or_db_calls(monkeypa
     def _fake_boto3_client(service_name, region_name):
         boto3_calls.append({"service_name": service_name, "region_name": region_name})
         raise AssertionError(
-            "AWS client should not be called for non G/VT instance types"
+            "AWS client should not be called for non G/VT/P instance types"
         )
 
     monkeypatch.setattr(aws_module.boto3, "client", _fake_boto3_client)
@@ -652,10 +701,46 @@ def test_create_launch_task_rejects_non_g_or_vt_without_aws_or_db_calls(monkeypa
     )
 
     assert result.exit_code != 0
-    assert "G/VT family" in result.output
+    assert "G/VT/P family" in result.output
     assert boto3_calls == []
     assert store["db_paths"] == []
     assert store["tasks"] == []
+
+
+def test_create_launch_task_with_p_family_sets_p_capability(monkeypatch):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region, provider_name="aws": None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
+    monkeypatch.setattr(
+        task_id_module.uuid,
+        "uuid4",
+        lambda: uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
+    )
+
+    result = runner.invoke(
+        cli_module.cli,
+        ["create-launch-task", "--instance-type", "p4d.24xlarge"],
+    )
+
+    assert result.exit_code == 0
+    assert len(store["tasks"]) == 2
+    assert (
+        store["tasks"][0]["taskid"] == "us-east-1:p4d.24xlarge:"
+        f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    )
+    assert store["tasks"][1]["capability"] == "p"
 
 
 def test_create_launch_task_rejects_invalid_aws_instance_type(monkeypatch):
@@ -796,7 +881,9 @@ def test_create_launch_task_re_raises_validation_error_as_click_exception(monkey
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: (_ for _ in ()).throw(RuntimeError("boom")),
+        lambda instance_type, region, provider_name="aws": (_ for _ in ()).throw(
+            RuntimeError("boom")
+        ),
     )
     monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
 
@@ -820,10 +907,10 @@ def test_create_launch_task_validates_ami_with_normalized_values(monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: None,
+        lambda instance_type, region, provider_name="aws": None,
     )
 
-    def _capture_ami_validation(ami_id, region):
+    def _capture_ami_validation(ami_id, region, provider_name="aws"):
         captured.append({"ami_id": ami_id, "region": region})
 
     monkeypatch.setattr(cli_module, "validate_launch_ami", _capture_ami_validation)
@@ -859,12 +946,14 @@ def test_create_launch_task_re_raises_ami_validation_error_as_click_exception(
     monkeypatch.setattr(
         cli_module,
         "validate_launch_instance_type",
-        lambda instance_type, region: None,
+        lambda instance_type, region, provider_name="aws": None,
     )
     monkeypatch.setattr(
         cli_module,
         "validate_launch_ami",
-        lambda ami_id, region: (_ for _ in ()).throw(RuntimeError("ami boom")),
+        lambda ami_id, region, provider_name="aws": (_ for _ in ()).throw(
+            RuntimeError("ami boom")
+        ),
     )
     monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
 
@@ -904,6 +993,7 @@ def test_worker_passes_ec2_key_name_env_var_to_launch(monkeypatch):
         user_data=None,
         key_name=None,
         instance_profile_name=None,
+        provider_name="aws",
     ):
         store["launch_calls"].append({"key_name": key_name})
         return "i-1234567890abcdef0"
@@ -944,6 +1034,7 @@ def test_worker_omits_key_name_when_ec2_key_name_env_var_not_set(monkeypatch):
         user_data=None,
         key_name=None,
         instance_profile_name=None,
+        provider_name="aws",
     ):
         store["launch_calls"].append({"key_name": key_name})
         return "i-1234567890abcdef0"
@@ -1167,6 +1258,7 @@ def test_worker_passes_iam_instance_profile_env_var_to_launch(monkeypatch):
         user_data=None,
         key_name=None,
         instance_profile_name=None,
+        provider_name="aws",
     ):
         store["launch_calls"].append({"instance_profile_name": instance_profile_name})
         return "i-1234567890abcdef0"
@@ -1207,6 +1299,7 @@ def test_worker_omits_iam_instance_profile_when_env_var_not_set(monkeypatch):
         user_data=None,
         key_name=None,
         instance_profile_name=None,
+        provider_name="aws",
     ):
         store["launch_calls"].append({"instance_profile_name": instance_profile_name})
         return "i-1234567890abcdef0"
@@ -1226,42 +1319,48 @@ def test_smoke_launch_and_teardown_flow_in_moto(tmp_path):
     runner = CliRunner()
     db_path = tmp_path / "eco388-smoke.db"
 
-    with mock_aws():
-        ec2_client = boto3.client("ec2", region_name="us-east-1")
-        ami_id = ec2_client.register_image(Name="eco388-smoke-ami")["ImageId"]
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.delenv("EC2_KEY_NAME", raising=False)
+        monkeypatch.delenv("EC2_IAM_INSTANCE_PROFILE", raising=False)
 
-        create_result = runner.invoke(
-            cli_module.cli,
-            [
-                "create-launch-task",
-                "--instance-type",
-                "g5.xlarge",
-                "--ami-id",
-                ami_id,
-                "--db-path",
-                str(db_path),
-            ],
-        )
-        assert create_result.exit_code == 0
+        with mock_aws():
+            ec2_client = boto3.client("ec2", region_name="us-east-1")
+            ami_id = ec2_client.register_image(Name="eco388-smoke-ami")["ImageId"]
 
-        worker_result = runner.invoke(
-            cli_module.cli,
-            ["worker", "--capability", "launch", "--db-path", str(db_path)],
-        )
-        assert worker_result.exit_code == 0
-        match = re.search(r"instance '([^']+)'", worker_result.output)
-        assert match is not None
-        instance_id = match.group(1)
+            create_result = runner.invoke(
+                cli_module.cli,
+                [
+                    "create-launch-task",
+                    "--instance-type",
+                    "g5.xlarge",
+                    "--ami-id",
+                    ami_id,
+                    "--db-path",
+                    str(db_path),
+                ],
+            )
+            assert create_result.exit_code == 0
 
-        describe_result = ec2_client.describe_instances(InstanceIds=[instance_id])
-        state = describe_result["Reservations"][0]["Instances"][0]["State"]["Name"]
-        assert state == "running"
+            worker_result = runner.invoke(
+                cli_module.cli,
+                ["worker", "--capability", "launch", "--db-path", str(db_path)],
+            )
+            assert worker_result.exit_code == 0
+            match = re.search(r"instance '([^']+)'", worker_result.output)
+            assert match is not None
+            instance_id = match.group(1)
 
-        ec2_client.terminate_instances(InstanceIds=[instance_id])
-        waiter = ec2_client.get_waiter("instance_terminated")
-        waiter.wait(
-            InstanceIds=[instance_id], WaiterConfig={"Delay": 1, "MaxAttempts": 10}
-        )
-        final_result = ec2_client.describe_instances(InstanceIds=[instance_id])
-        final_state = final_result["Reservations"][0]["Instances"][0]["State"]["Name"]
-        assert final_state == "terminated"
+            describe_result = ec2_client.describe_instances(InstanceIds=[instance_id])
+            state = describe_result["Reservations"][0]["Instances"][0]["State"]["Name"]
+            assert state == "running"
+
+            ec2_client.terminate_instances(InstanceIds=[instance_id])
+            waiter = ec2_client.get_waiter("instance_terminated")
+            waiter.wait(
+                InstanceIds=[instance_id], WaiterConfig={"Delay": 1, "MaxAttempts": 10}
+            )
+            final_result = ec2_client.describe_instances(InstanceIds=[instance_id])
+            final_state = final_result["Reservations"][0]["Instances"][0]["State"][
+                "Name"
+            ]
+            assert final_state == "terminated"

@@ -6,6 +6,7 @@ from moto import mock_aws
 
 from benchmarking_orchestration.aws import (
     _extract_running_ondemand_g_instance_types,
+    _is_launch_supported_instance_type,
     _is_ondemand_g_or_vt_instance_type,
     _is_ondemand_g_quota_name,
     _resolve_vcpus_by_instance_type,
@@ -106,6 +107,14 @@ class _CaptureRunInstancesClient:
         return self._Waiter()
 
 
+class _DescribeInstanceTypeClient:
+    def __init__(self, resolved_instance_type: str):
+        self._resolved_instance_type = resolved_instance_type
+
+    def describe_instance_types(self, InstanceTypes):
+        return {"InstanceTypes": [{"InstanceType": self._resolved_instance_type}]}
+
+
 def test_quota_name_match():
     assert _is_ondemand_g_quota_name("Running On-Demand G and VT instances")
     assert not _is_ondemand_g_quota_name(
@@ -117,6 +126,13 @@ def test_instance_type_match():
     assert _is_ondemand_g_or_vt_instance_type("g5.2xlarge")
     assert _is_ondemand_g_or_vt_instance_type("vt1.3xlarge")
     assert not _is_ondemand_g_or_vt_instance_type("c6a.large")
+
+
+def test_launch_supported_instance_type_match():
+    assert _is_launch_supported_instance_type("g5.2xlarge")
+    assert _is_launch_supported_instance_type("vt1.3xlarge")
+    assert _is_launch_supported_instance_type("p4d.24xlarge")
+    assert not _is_launch_supported_instance_type("c6a.large")
 
 
 def test_extract_running_ondemand_g_instance_types():
@@ -242,13 +258,20 @@ def test_validate_launch_instance_type_accepts_valid_vt_type(ec2_client):
     validate_launch_instance_type("vt1.3xlarge", ec2_client=ec2_client)
 
 
+def test_validate_launch_instance_type_accepts_valid_p_type():
+    validate_launch_instance_type(
+        "p4d.24xlarge",
+        ec2_client=_DescribeInstanceTypeClient("p4d.24xlarge"),
+    )
+
+
 def test_validate_launch_instance_type_raises_for_empty_value(ec2_client):
     with pytest.raises(ValueError, match="instance type cannot be empty"):
         validate_launch_instance_type("   ", ec2_client=ec2_client)
 
 
-def test_validate_launch_instance_type_raises_for_non_g_vt_family(ec2_client):
-    with pytest.raises(ValueError, match="G/VT family"):
+def test_validate_launch_instance_type_raises_for_non_g_vt_p_family(ec2_client):
+    with pytest.raises(ValueError, match="G/VT/P family"):
         validate_launch_instance_type("c6a.large", ec2_client=ec2_client)
 
 
