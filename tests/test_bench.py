@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -97,4 +98,53 @@ def test_run_benchmark_wraps_md_failure_as_runtime_error(tmp_path):
             run_benchmark(repo, s3_bucket="bucket", task_id="bench:task")
 
     for mod in ("rbfe_benchmark", "md_benchmark"):
+        sys.modules.pop(mod, None)
+
+
+def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path):
+    repo = _make_benchmark_repo(tmp_path)
+    benchmark_dir = repo / "benchmark"
+    _write_fake_benchmark_script(benchmark_dir, "md_benchmark.py")
+
+    uploaded_by_key: dict[str, str] = {}
+
+    class _FakeS3Client:
+        def upload_file(self, filename, bucket, key):
+            assert bucket == "bucket"
+            uploaded_by_key[key] = Path(filename).read_text(encoding="utf-8")
+
+    task_id = (
+        "bench:us-east-1:g5.xlarge:ami-1234:"
+        "IyEvYmluL2Jhc2gKZWNobyAiaGVsbG8iCg==:"
+        "123e4567-e89b-12d3-a456-426614174000"
+    )
+    expected_hash = hashlib.sha256(task_id.encode("utf-8")).hexdigest()
+
+    with patch(
+        "benchmarking_orchestration.bench.boto3.client",
+        return_value=_FakeS3Client(),
+    ):
+        run_benchmark(repo, s3_bucket="bucket", task_id=task_id)
+
+    manifest_key = next(
+        key for key in uploaded_by_key if key.endswith("/manifest.json")
+    )
+    manifest = json.loads(uploaded_by_key[manifest_key])
+    run_date = manifest["timestamps"]["started_at_utc"].split("T")[0]
+    expected_prefix = f"runs/{run_date}/{expected_hash}"
+
+    input_key = f"{expected_prefix}/input/ross_dodecahedron_jacs.json"
+    output_key = f"{expected_prefix}/output/md_benchmark.out"
+    expected_manifest_key = f"{expected_prefix}/manifest.json"
+
+    assert set(uploaded_by_key) == {input_key, output_key, expected_manifest_key}
+
+    assert manifest["bench_task_id"] == task_id
+    assert manifest["s3_prefix"] == expected_prefix
+    assert manifest["input"]["s3_key"] == input_key
+    assert manifest["output"]["s3_key"] == output_key
+    assert manifest["output"]["json_parse_ok"] is True
+    assert manifest["output"]["top_level_keys_match_input"] is True
+
+    for mod in ("md_benchmark",):
         sys.modules.pop(mod, None)
