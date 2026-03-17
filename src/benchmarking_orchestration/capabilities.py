@@ -11,6 +11,7 @@ class WorkerCapability(StrEnum):
     LAUNCH = "launch"
     G3 = "g3"
     G4DN = "g4dn"
+    G6 = "g6"
     G5 = "g5"
     P = "p"
     VT1 = "vt1"
