@@ -18,7 +18,7 @@ apt-get install -y git nvtop
 sudo -u ubuntu -i bash <<EOF
 set -euo pipefail
 
-curl -fsSL https://pixi.sh/install.sh | bash
+curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=0.64.0 bash
 export PATH="\$HOME/.pixi/bin:\$PATH"
 
 git clone https://github.com/omsf-eco-infra/benchmarking-orchestration.git
