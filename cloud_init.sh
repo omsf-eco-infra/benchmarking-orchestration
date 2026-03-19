@@ -16,14 +16,15 @@ apt-get update -y
 apt-get install -y git nvtop
 
 sudo -u ubuntu -i bash <<EOF
+BASE_PATH="/opt/dlami/nvme"
 set -euo pipefail
 
 curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=0.64.0 bash
 export PATH="\$HOME/.pixi/bin:\$PATH"
 
-git clone https://github.com/omsf-eco-infra/benchmarking-orchestration.git
-git clone -b industry_benchmarks --single-branch https://github.com/OpenFreeEnergy/performance_benchmarks.git
-CLI_PATH="\$HOME/benchmarking-orchestration"
+git clone https://github.com/omsf-eco-infra/benchmarking-orchestration.git "\$BASE_PATH/benchmarking-orchestration"
+git clone -b industry_benchmarks --single-branch https://github.com/OpenFreeEnergy/performance_benchmarks.git "\$BASE_PATH/benchmarking-orchestration"
+CLI_PATH="\$BASE_PATH/benchmarking-orchestration"
 pixi install --manifest-path "\$CLI_PATH/pyproject.toml" -e bench
 
 export TURSO_DATABASE_URL="${TURSO_DATABASE_URL}"
