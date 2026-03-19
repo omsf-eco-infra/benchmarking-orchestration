@@ -202,7 +202,22 @@ def cli(ctx: click.Context) -> None:
     help="Compute provider used for launch tasks.",
 )
 @click.option("--db-path", default=None, type=str)
-def worker(capability: WorkerCapability, provider: str, db_path: str) -> None:
+@click.option(
+    "--bench-repo-path",
+    default="/opt/dlami/nvme/performance_benchmarks",
+    show_default=True,
+    type=click.Path(path_type=Path, file_okay=False, dir_okay=True),
+    envvar="BENCHMARK_REPO_PATH",
+    help=(
+        "Path to the cloned performance_benchmarks repo (or set BENCHMARK_REPO_PATH)."
+    ),
+)
+def worker(
+    capability: WorkerCapability,
+    provider: str,
+    db_path: str,
+    bench_repo_path: Path,
+) -> None:
     """Run a worker with a selected capability.
 
     Parameters
@@ -213,6 +228,8 @@ def worker(capability: WorkerCapability, provider: str, db_path: str) -> None:
         Compute provider used for launch tasks.
     db_path : str
         Optional filesystem path to the task status database.
+    bench_repo_path : Path
+        Path to the cloned ``performance_benchmarks`` repository.
     """
     normalized_provider = _normalize_provider_name(provider)
     db_path_label = db_path if db_path is not None else "task_status.db"
@@ -284,7 +301,7 @@ def worker(capability: WorkerCapability, provider: str, db_path: str) -> None:
                     "S3_BUCKET environment variable is required for bench tasks."
                 )
 
-            bench_repo = Path.home() / "performance_benchmarks"
+            bench_repo = bench_repo_path
             try:
                 run_benchmark(
                     benchmark_repo_path=bench_repo,

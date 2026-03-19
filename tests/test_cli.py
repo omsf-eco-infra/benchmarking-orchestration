@@ -1084,10 +1084,62 @@ def test_worker_bench_task_calls_run_benchmark_and_marks_success(monkeypatch):
     assert result.exit_code == 0, result.output
     assert len(store["bench_calls"]) == 1
     call = store["bench_calls"][0]
+    assert str(call["benchmark_repo_path"]) == "/opt/dlami/nvme/performance_benchmarks"
     assert call["s3_bucket"] == "test-results-bucket"
     assert call["task_id"] == taskid
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
     assert "Processed bench task" in result.output
+
+
+def test_worker_bench_task_uses_custom_bench_repo_path_flag(monkeypatch):
+    runner = CliRunner()
+    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": [], "bench_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_run_benchmark(benchmark_repo_path, s3_bucket, task_id):
+        store["bench_calls"].append(
+            {
+                "benchmark_repo_path": benchmark_repo_path,
+                "s3_bucket": s3_bucket,
+                "task_id": task_id,
+            }
+        )
+
+    custom_repo = Path("/tmp/custom-performance-benchmarks")
+
+    monkeypatch.setenv("S3_BUCKET", "test-results-bucket")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "run_benchmark", _fake_run_benchmark)
+
+    result = runner.invoke(
+        cli_module.cli,
+        [
+            "worker",
+            "--capability",
+            "g5",
+            "--bench-repo-path",
+            str(custom_repo),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(store["bench_calls"]) == 1
+    call = store["bench_calls"][0]
+    assert call["benchmark_repo_path"] == custom_repo
+    assert call["s3_bucket"] == "test-results-bucket"
+    assert call["task_id"] == taskid
+    assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
 
 
 def test_worker_bench_task_marks_failure_when_run_benchmark_raises(monkeypatch):
