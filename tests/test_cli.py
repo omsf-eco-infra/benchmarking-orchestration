@@ -743,6 +743,42 @@ def test_create_launch_task_with_p_family_sets_p_capability(monkeypatch):
     assert store["tasks"][1]["capability"] == "p"
 
 
+def test_create_launch_task_with_g6e_family_sets_g6e_capability(monkeypatch):
+    runner = CliRunner()
+    store = {"db_paths": [], "tasks": []}
+
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _build_fake_task_db(store))
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_instance_type",
+        lambda instance_type, region, provider_name="aws": None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region, provider_name="aws": None,
+    )
+    monkeypatch.setattr(
+        task_id_module.uuid,
+        "uuid4",
+        lambda: uuid.UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+    )
+
+    result = runner.invoke(
+        cli_module.cli,
+        ["create-launch-task", "--instance-type", "g6e.xlarge"],
+    )
+
+    assert result.exit_code == 0
+    assert len(store["tasks"]) == 2
+    assert (
+        store["tasks"][0]["taskid"] == "us-east-1:g6e.xlarge:"
+        f"{aws_module.DEFAULT_LAUNCH_AMI_ID}:"
+        "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    )
+    assert store["tasks"][1]["capability"] == "g6e"
+
+
 def test_create_launch_task_rejects_invalid_aws_instance_type(monkeypatch):
     runner = CliRunner()
     store = {"db_paths": [], "tasks": []}

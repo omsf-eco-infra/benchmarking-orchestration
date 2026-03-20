@@ -12,6 +12,7 @@ class WorkerCapability(StrEnum):
     G3 = "g3"
     G4DN = "g4dn"
     G6 = "g6"
+    G6E = "g6e"
     G5 = "g5"
     P = "p"
     VT1 = "vt1"

@@ -124,12 +124,14 @@ def test_quota_name_match():
 
 def test_instance_type_match():
     assert _is_ondemand_g_or_vt_instance_type("g5.2xlarge")
+    assert _is_ondemand_g_or_vt_instance_type("g6e.xlarge")
     assert _is_ondemand_g_or_vt_instance_type("vt1.3xlarge")
     assert not _is_ondemand_g_or_vt_instance_type("c6a.large")
 
 
 def test_launch_supported_instance_type_match():
     assert _is_launch_supported_instance_type("g5.2xlarge")
+    assert _is_launch_supported_instance_type("g6e.xlarge")
     assert _is_launch_supported_instance_type("vt1.3xlarge")
     assert _is_launch_supported_instance_type("p4d.24xlarge")
     assert not _is_launch_supported_instance_type("c6a.large")
