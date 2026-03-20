@@ -317,6 +317,7 @@ def launch_ec2_instance(
         "InstanceType": normalized_instance_type,
         "MinCount": 1,
         "MaxCount": 1,
+        "InstanceInitiatedShutdownBehavior": "terminate",
     }
     if user_data is not None:
         run_instances_kwargs["UserData"] = user_data

@@ -11,6 +11,8 @@ S3_BUCKET="@S3_BUCKET"
 : "${GPU_CAPABILITY:?GPU_CAPABILITY is required}"
 : "${S3_BUCKET:?S3_BUCKET is required}"
 
+trap 'shutdown -h now' EXIT
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y git nvtop
