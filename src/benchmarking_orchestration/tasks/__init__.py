@@ -60,6 +60,39 @@ class TaskStatusDB(exorcist.TaskStatusDB):
         super().add_task(taskid, requirements, max_tries)
         self.add_task_capability(taskid, capability)
 
+    def get_status_summary(self) -> list[dict]:
+        """Return task counts grouped by capability and status.
+
+        Returns
+        -------
+        list[dict]
+            List of dicts with keys ``capability`` (str), ``status`` (int),
+            and ``count`` (int), one entry per observed capability/status pair.
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                sqla.select(
+                    self.task_capabilities_table.c.capability,
+                    self.tasks_table.c.status,
+                    sqla.func.count().label("count"),
+                )
+                .select_from(
+                    self.tasks_table.join(
+                        self.task_capabilities_table,
+                        self.task_capabilities_table.c.taskid
+                        == self.tasks_table.c.taskid,
+                    )
+                )
+                .group_by(
+                    self.task_capabilities_table.c.capability,
+                    self.tasks_table.c.status,
+                )
+            ).all()
+        return [
+            {"capability": row[0], "status": row[1], "count": row[2]}
+            for row in rows
+        ]
+
     def check_out_task_with_capability(self, capability: str):
         _logger.info("Checking out task")
         subq = (

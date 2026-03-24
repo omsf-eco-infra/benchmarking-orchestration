@@ -26,6 +26,9 @@ from .providers import (
     get_provider,
     _provider_choices,
 )
+from exorcist.models import TaskStatus
+
+from .analysis import fetch_and_analyze_results, print_results_table
 from .bench import run_benchmark
 from .task_id import _build_task_id, _parse_launch_task_id
 from .tasks import TaskStatusDB
@@ -457,3 +460,105 @@ def create_launch_task(
         f"Created launch task for instance type '{normalized_instance_type}' with AMI "
         f"'{normalized_ami_id}' in region '{normalized_region}'."
     )
+
+
+@cli.command(
+    "analyze-results",
+    help="Fetch S3 benchmark manifests and summarize results by instance type.",
+)
+@click.option(
+    "--s3-bucket",
+    required=True,
+    envvar="S3_BUCKET",
+    help="S3 bucket containing benchmark results.",
+)
+@click.option(
+    "--s3-prefix",
+    default="runs/",
+    show_default=True,
+    help="S3 key prefix to search under.",
+)
+def analyze_results(s3_bucket: str, s3_prefix: str) -> None:
+    """Fetch S3 benchmark manifests and summarize results by instance type.
+
+    Parameters
+    ----------
+    s3_bucket : str
+        S3 bucket containing benchmark results.
+    s3_prefix : str
+        S3 key prefix to search under.
+    """
+    try:
+        records = fetch_and_analyze_results(s3_bucket, s3_prefix)
+    except Exception as exc:
+        raise click.ClickException(f"Failed to fetch results: {exc}") from exc
+    print_results_table(records)
+
+
+_STATUS_COLUMNS = [
+    ("BLOCKED", TaskStatus.BLOCKED),
+    ("AVAILABLE", TaskStatus.AVAILABLE),
+    ("IN_PROGRESS", TaskStatus.IN_PROGRESS),
+    ("COMPLETED", TaskStatus.COMPLETED),
+    ("FAILED", TaskStatus.TOO_MANY_RETRIES),
+    ("ERROR", TaskStatus.ERROR),
+]
+
+
+def _print_status_table(rows: list[dict]) -> None:
+    """Print a pivot table of task counts by capability and status.
+
+    Parameters
+    ----------
+    rows : list[dict]
+        List of dicts with keys ``capability``, ``status``, and ``count``,
+        as returned by :meth:`.TaskStatusDB.get_status_summary`.
+    """
+    # Build a mapping: capability -> status_value -> count
+    counts: dict[str, dict[int, int]] = {}
+    for row in rows:
+        cap = row["capability"]
+        counts.setdefault(cap, {})
+        counts[cap][row["status"]] = row["count"]
+
+    if not counts:
+        click.echo("No tasks found.")
+        return
+
+    col_labels = [label for label, _ in _STATUS_COLUMNS]
+    col_width = max(len(label) for label in col_labels) + 2
+    cap_width = max(len(cap) for cap in counts) + 2
+
+    header = f"{'Capability':<{cap_width}}" + "".join(
+        f"{label:>{col_width}}" for label in col_labels
+    )
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for cap in sorted(counts):
+        row_str = f"{cap:<{cap_width}}"
+        for _, status in _STATUS_COLUMNS:
+            n = counts[cap].get(status.value, 0)
+            row_str += f"{n:>{col_width}}"
+        click.echo(row_str)
+
+
+@cli.command("status", help="Show task status summary grouped by capability.")
+@click.option("--db-path", default=None, type=str)
+def task_status(db_path: str | None) -> None:
+    """Show a summary of task counts grouped by capability and status.
+
+    Parameters
+    ----------
+    db_path : str, optional
+        Filesystem path to the task status database.
+    """
+    db_path_label = db_path if db_path is not None else "task_status.db"
+    try:
+        task_db = _setup_task_status_db(db_path)
+        rows = task_db.get_status_summary()
+    except Exception as exc:
+        raise click.ClickException(
+            f"Unable to read database '{db_path_label}': {exc}"
+        ) from exc
+    _print_status_table(rows)
