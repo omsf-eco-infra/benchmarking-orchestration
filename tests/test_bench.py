@@ -91,6 +91,50 @@ def _write_fake_rbfe_script_with_openfe19_style_outputs(benchmark_dir: Path) -> 
     )
 
 
+def _write_fake_rbfe_script_without_nc_output(benchmark_dir: Path) -> None:
+    """Write RBFE script with no ``nc`` key but with checkpoint outputs."""
+    script = benchmark_dir / "rbfe_benchmark.py"
+    script.write_text(
+        "import click\nimport json\nimport pathlib\nimport yaml\n\n"
+        "def get_performance(dagres, protocol):\n"
+        "    protocol_results = protocol.gather([dagres])\n"
+        "    nc = [purs[0].outputs['nc'] for purs in protocol_results.data.values()][0]\n"
+        "    filepath = nc.resolve().parent\n"
+        "    log = filepath / 'simulation_real_time_analysis.yaml'\n"
+        "    with open(log) as stream:\n"
+        "        data = yaml.safe_load(stream)\n"
+        "    return data[-1]['timing_data']['ns_per_day']\n\n"
+        "class _UnitResult:\n"
+        "    def __init__(self, outputs):\n"
+        "        self.outputs = outputs\n\n"
+        "class _ProtocolResults:\n"
+        "    def __init__(self, checkpoint_path, trajectory_path):\n"
+        "        self.data = {'repeat_0': [_UnitResult({'checkpoint': checkpoint_path, 'trajectory': trajectory_path})]}\n\n"
+        "class _Protocol:\n"
+        "    def __init__(self, checkpoint_path, trajectory_path):\n"
+        "        self._checkpoint_path = checkpoint_path\n"
+        "        self._trajectory_path = trajectory_path\n"
+        "    def gather(self, _results):\n"
+        "        return _ProtocolResults(self._checkpoint_path, self._trajectory_path)\n\n"
+        "@click.command()\n"
+        "@click.option('--input_file', required=True)\n"
+        "@click.option('--output_file', required=True)\n"
+        "def run_benchmark(input_file, output_file):\n"
+        "    perf_dir = pathlib.Path(output_file).resolve().parent / 'perf'\n"
+        "    perf_dir.mkdir(parents=True, exist_ok=True)\n"
+        "    checkpoint_path = perf_dir / 'simulation_checkpoint.nc'\n"
+        "    checkpoint_path.write_text('')\n"
+        "    trajectory_path = perf_dir / 'simulation.xtc'\n"
+        "    trajectory_path.write_text('')\n"
+        "    (perf_dir / 'simulation_real_time_analysis.yaml').write_text('- timing_data:\\n    ns_per_day: 34.5\\n', encoding='utf-8')\n"
+        "    ns_per_day = get_performance(object(), _Protocol(checkpoint_path, trajectory_path))\n"
+        "    with open(output_file, 'w') as f:\n"
+        "        json.dump({'system_a': ns_per_day}, f)\n\n"
+        "if __name__ == '__main__':\n"
+        "    run_benchmark()\n"
+    )
+
+
 # ---------------------------------------------------------------------------
 # run_benchmark() unit tests
 # ---------------------------------------------------------------------------
@@ -279,6 +323,44 @@ def test_run_benchmark_rbfe_compat_handles_openfe19_style_protocol_units(tmp_pat
     output_payload = json.loads(uploaded_by_key[output_key])
 
     assert output_payload["system_a"] == 12.3
+
+    for mod in ("rbfe_benchmark",):
+        sys.modules.pop(mod, None)
+
+
+def test_run_benchmark_rbfe_compat_handles_outputs_without_nc_key(tmp_path):
+    repo = _make_benchmark_repo(tmp_path)
+    benchmark_dir = repo / "benchmark"
+    _write_fake_rbfe_script_without_nc_output(benchmark_dir)
+
+    uploaded_by_key: dict[str, str] = {}
+
+    class _FakeS3Client:
+        def upload_file(self, filename, bucket, key):
+            assert bucket == "bucket"
+            uploaded_by_key[key] = Path(filename).read_text(encoding="utf-8")
+
+    task_id = (
+        "bench:rbfe:us-east-1:g5.xlarge:ami-1234:123e4567-e89b-12d3-a456-426614174000"
+    )
+
+    with patch(
+        "benchmarking_orchestration.bench.boto3.client",
+        return_value=_FakeS3Client(),
+    ):
+        run_benchmark(
+            repo,
+            s3_bucket="bucket",
+            task_id=task_id,
+            benchmark_kind=BenchmarkKind.RBFE,
+        )
+
+    output_key = next(
+        key for key in uploaded_by_key if key.endswith("/output/rbfe_benchmark.out")
+    )
+    output_payload = json.loads(uploaded_by_key[output_key])
+
+    assert output_payload["system_a"] == 34.5
 
     for mod in ("rbfe_benchmark",):
         sys.modules.pop(mod, None)

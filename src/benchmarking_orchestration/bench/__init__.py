@@ -219,14 +219,52 @@ def _patch_rbfe_performance_reader_for_openfe_compat(benchmark_module: Any) -> N
         protocol_results = protocol.gather([dagres])
         protocol_data = getattr(protocol_results, "data", {})
 
+        def _iter_path_like_values(value: Any):
+            """Yield path-like values from nested output structures."""
+            if isinstance(value, (str, Path)):
+                yield Path(value)
+                return
+            if hasattr(value, "resolve"):
+                try:
+                    yield Path(value)
+                except TypeError:
+                    pass
+                return
+            if isinstance(value, dict):
+                for nested_value in value.values():
+                    yield from _iter_path_like_values(nested_value)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for nested_value in value:
+                    yield from _iter_path_like_values(nested_value)
+
+        def _extract_ns_per_day_from_yaml(log_path: Path) -> float | None:
+            """Return final ns/day from a real-time analysis YAML file."""
+            if not log_path.exists():
+                return None
+            with log_path.open(encoding="utf-8") as stream:
+                data = yaml_module.safe_load(stream)
+            if not isinstance(data, list) or not data:
+                return None
+            timing_data = data[-1].get("timing_data")
+            if not isinstance(timing_data, dict):
+                return None
+            ns_per_day = timing_data.get("ns_per_day")
+            if ns_per_day is None:
+                return None
+            return float(ns_per_day)
+
         nc_path = None
         observed_output_keys: set[str] = set()
+        path_candidates: list[Path] = []
         for protocol_unit_results in protocol_data.values():
             for unit_result in protocol_unit_results:
                 outputs = getattr(unit_result, "outputs", {})
                 if not isinstance(outputs, dict):
                     continue
                 observed_output_keys.update(str(key) for key in outputs.keys())
+                for output_value in outputs.values():
+                    path_candidates.extend(_iter_path_like_values(output_value))
                 candidate = outputs.get("nc")
                 if candidate is not None:
                     nc_path = candidate
@@ -234,22 +272,44 @@ def _patch_rbfe_performance_reader_for_openfe_compat(benchmark_module: Any) -> N
             if nc_path is not None:
                 break
 
-        if nc_path is None:
-            observed = ", ".join(sorted(observed_output_keys))
-            if not observed:
-                observed = "<none>"
-            raise KeyError(
-                "'nc' not found in gathered protocol unit outputs. "
-                f"Observed output keys: {observed}."
+        if nc_path is not None:
+            resolved_nc_path = (
+                nc_path.resolve() if hasattr(nc_path, "resolve") else Path(nc_path)
             )
+            log_path = resolved_nc_path.parent / "simulation_real_time_analysis.yaml"
+            ns_per_day = _extract_ns_per_day_from_yaml(log_path)
+            if ns_per_day is not None:
+                return ns_per_day
 
-        resolved_nc_path = (
-            nc_path.resolve() if hasattr(nc_path, "resolve") else Path(nc_path)
+        # openfe>=1.9 can omit an explicit "nc" output key. Fall back to
+        # path-like outputs such as checkpoint/trajectory and look for the
+        # real-time analysis YAML nearby.
+        log_filenames = (
+            "simulation_real_time_analysis.yaml",
+            "real_time_analysis.yaml",
         )
-        log_path = resolved_nc_path.parent / "simulation_real_time_analysis.yaml"
-        with log_path.open(encoding="utf-8") as stream:
-            data = yaml_module.safe_load(stream)
-        return data[-1]["timing_data"]["ns_per_day"]
+        for path_candidate in path_candidates:
+            candidate_dirs = []
+            if path_candidate.is_dir():
+                candidate_dirs.append(path_candidate)
+            candidate_dirs.append(path_candidate.parent)
+            candidate_dirs.append(path_candidate.parent.parent)
+            for candidate_dir in candidate_dirs:
+                for log_filename in log_filenames:
+                    ns_per_day = _extract_ns_per_day_from_yaml(
+                        candidate_dir / log_filename
+                    )
+                    if ns_per_day is not None:
+                        return ns_per_day
+
+        observed = ", ".join(sorted(observed_output_keys))
+        if not observed:
+            observed = "<none>"
+        raise KeyError(
+            "Unable to resolve benchmark performance from gathered protocol "
+            "unit outputs. "
+            f"Observed output keys: {observed}."
+        )
 
     benchmark_module.get_performance = _compat_get_performance
 
