@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 import boto3
 
+from .benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
 from .task_id import _parse_launch_task_id
 
 
@@ -25,6 +27,8 @@ class RunRecord:
         Mapping of system name to ns/day performance metric.
     output_valid : bool
         Whether the output JSON was successfully parsed.
+    benchmark_kind : str
+        Benchmark workload kind recorded in the manifest.
     """
 
     instance_type: str
@@ -32,6 +36,7 @@ class RunRecord:
     wall_seconds: float
     ns_per_day_by_system: dict[str, float] = field(default_factory=dict)
     output_valid: bool = False
+    benchmark_kind: str = BenchmarkKind.MD.value
 
 
 def _parse_utc_timestamp(ts: str) -> datetime:
@@ -52,7 +57,7 @@ def _parse_utc_timestamp(ts: str) -> datetime:
 
 def _get_on_demand_price_usd_per_hr(
     instance_type: str,
-    pricing_client: object,
+    pricing_client: Any,
     cache: dict[str, float | None],
 ) -> float | None:
     """Fetch the on-demand USD/hr price for an EC2 instance type.
@@ -61,7 +66,7 @@ def _get_on_demand_price_usd_per_hr(
     ----------
     instance_type : str
         EC2 instance type, e.g. ``"g5.xlarge"``.
-    pricing_client : object
+    pricing_client : Any
         Boto3 ``pricing`` client (``us-east-1`` endpoint).
     cache : dict[str, float | None]
         Mutable dict used to cache results within a single call to avoid
@@ -175,6 +180,12 @@ def fetch_and_analyze_results(
             continue
 
         output_info = manifest.get("output", {})
+        benchmark_kind_raw = str(manifest.get("benchmark_kind", BenchmarkKind.MD.value))
+        try:
+            benchmark_kind = _normalize_benchmark_kind(benchmark_kind_raw).value
+        except ValueError:
+            benchmark_kind = BenchmarkKind.MD.value
+
         json_parse_ok = output_info.get("json_parse_ok", False)
         output_s3_key = output_info.get("s3_key")
 
@@ -202,6 +213,7 @@ def fetch_and_analyze_results(
                 wall_seconds=wall_seconds,
                 ns_per_day_by_system=ns_per_day_by_system,
                 output_valid=output_valid,
+                benchmark_kind=benchmark_kind,
             )
         )
 

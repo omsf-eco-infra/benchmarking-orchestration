@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from .benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
 from .providers.aws_provider import DEFAULT_LAUNCH_AMI_ID
 
 
@@ -98,3 +99,75 @@ def _parse_launch_task_id(taskid: str) -> tuple[str, str, str, str | None]:
         normalized_ami_id,
         normalized_cloud_init_b64,
     )
+
+
+def _build_bench_task_id(
+    launch_task_id: str,
+    benchmark_kind: BenchmarkKind = BenchmarkKind.MD,
+) -> str:
+    """Build a benchmark task identifier that encodes benchmark kind.
+
+    Parameters
+    ----------
+    launch_task_id : str
+        Launch task identifier this bench task depends on.
+    benchmark_kind : BenchmarkKind, default=BenchmarkKind.MD
+        Benchmark workload kind to execute.
+
+    Returns
+    -------
+    str
+        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format.
+    """
+    return f"bench:{benchmark_kind.value}:{launch_task_id}"
+
+
+def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
+    """Parse a benchmark task identifier into kind and launch task ID.
+
+    Parameters
+    ----------
+    taskid : str
+        Bench task identifier in either ``bench:<benchmark_kind>:<launch_task_id>``
+        or legacy ``bench:<launch_task_id>`` format.
+
+    Returns
+    -------
+    tuple[BenchmarkKind, str]
+        Parsed ``(benchmark_kind, launch_task_id)`` values.
+
+    Raises
+    ------
+    ValueError
+        If task identifier is malformed.
+    """
+    expected_format_message = (
+        "Invalid bench task ID format. Expected "
+        "'bench:<benchmark_kind>:<launch_task_id>' "
+        "or legacy 'bench:<launch_task_id>'."
+    )
+
+    if not taskid.startswith("bench:"):
+        raise ValueError(expected_format_message)
+
+    remainder = taskid.removeprefix("bench:").strip()
+    if not remainder:
+        raise ValueError(expected_format_message)
+
+    candidate_kind, separator, candidate_launch_task_id = remainder.partition(":")
+    benchmark_kind = BenchmarkKind.MD
+    launch_task_id = remainder
+    if separator:
+        try:
+            benchmark_kind = _normalize_benchmark_kind(candidate_kind)
+            launch_task_id = candidate_launch_task_id
+        except ValueError:
+            benchmark_kind = BenchmarkKind.MD
+            launch_task_id = remainder
+
+    normalized_launch_task_id = launch_task_id.strip()
+    if not normalized_launch_task_id:
+        raise ValueError(expected_format_message)
+
+    _parse_launch_task_id(normalized_launch_task_id)
+    return benchmark_kind, normalized_launch_task_id

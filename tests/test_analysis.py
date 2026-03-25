@@ -22,6 +22,7 @@ def _make_manifest(
     completed_at: str = "2024-01-15T10:30:00Z",
     output_s3_key: str = "runs/2024-01-15/abc/output/md_benchmark.out",
     json_parse_ok: bool = True,
+    benchmark_kind: str | None = None,
 ) -> bytes:
     manifest = {
         "schema_version": 1,
@@ -47,6 +48,8 @@ def _make_manifest(
             "completed_at_utc": completed_at,
         },
     }
+    if benchmark_kind is not None:
+        manifest["benchmark_kind"] = benchmark_kind
     return json.dumps(manifest).encode("utf-8")
 
 
@@ -176,6 +179,20 @@ def test_missing_output_json_handled_gracefully():
     assert len(records) == 1
     assert records[0].output_valid is False
     assert records[0].ns_per_day_by_system == {}
+
+
+def test_manifest_parses_rbfe_benchmark_kind():
+    task_id = "us-east-1:g5.xlarge:ami-12345678:aaaaaaaa-0000-0000-0000-000000000001"
+    manifest_bytes = _make_manifest(launch_task_id=task_id, benchmark_kind="rbfe")
+    output_bytes = json.dumps({"system_a": 42.0}).encode("utf-8")
+    s3 = _make_s3_mock(manifest_bytes, output_bytes)
+
+    with patch("benchmarking_orchestration.analysis.boto3") as mock_boto3:
+        mock_boto3.client.return_value = s3
+        records = fetch_and_analyze_results("my-bucket")
+
+    assert len(records) == 1
+    assert records[0].benchmark_kind == "rbfe"
 
 
 def test_invalid_output_json_handled_gracefully():

@@ -89,8 +89,7 @@ class TaskStatusDB(exorcist.TaskStatusDB):
                 )
             ).all()
         return [
-            {"capability": row[0], "status": row[1], "count": row[2]}
-            for row in rows
+            {"capability": row[0], "status": row[1], "count": row[2]} for row in rows
         ]
 
     def check_out_task_with_capability(self, capability: str):

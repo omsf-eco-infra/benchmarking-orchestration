@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import importlib
+import io
 import json
 import sys
 import tempfile
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import boto3
+
+from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
+from ..task_id import _parse_bench_task_id
 
 
 #: Default benchmark input JSON, relative to the data/ directory of the
 #: performance_benchmarks repo (industry_benchmarks branch).
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
-_RESULT_MANIFEST_SCHEMA_VERSION = 1
+_RESULT_MANIFEST_SCHEMA_VERSION = 2
 
 
 def _build_result_s3_prefix(task_id: str, run_started_at: datetime) -> str:
@@ -118,20 +126,105 @@ def _validate_output_against_input(
     return True, None
 
 
+def _resolve_benchmark_runner(
+    benchmark_dir: Path,
+    benchmark_kind: BenchmarkKind,
+) -> tuple[Any, str]:
+    """Resolve the selected benchmark Click command and output filename.
+
+    Parameters
+    ----------
+    benchmark_dir : Path
+        Directory containing benchmark scripts.
+    benchmark_kind : BenchmarkKind
+        Benchmark workload kind to execute.
+
+    Returns
+    -------
+    tuple[Any, str]
+        Pair of ``(click_command, output_filename)``.
+
+    Raises
+    ------
+    RuntimeError
+        If benchmark module import or command resolution fails.
+    """
+    module_name = f"{benchmark_kind.value}_benchmark"
+    output_filename = f"{module_name}.out"
+
+    sys.path.insert(0, str(benchmark_dir))
+    try:
+        benchmark_module = importlib.import_module(module_name)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to import benchmark module '{module_name}': {exc}"
+        ) from exc
+    finally:
+        sys.path.pop(0)
+
+    run_command = getattr(benchmark_module, "run_benchmark", None)
+    if run_command is None or not hasattr(run_command, "main"):
+        raise RuntimeError(
+            f"Benchmark module '{module_name}' does not expose a Click command "
+            "named 'run_benchmark'."
+        )
+    return run_command, output_filename
+
+
+def _write_text_file(file_path: Path, content: str) -> None:
+    """Write UTF-8 text content to a file path.
+
+    Parameters
+    ----------
+    file_path : Path
+        Destination file path.
+    content : str
+        Text content to write.
+    """
+    file_path.write_text(content, encoding="utf-8")
+
+
+def _extract_launch_task_id(bench_task_id: str) -> str:
+    """Extract a launch task ID from a benchmark task ID.
+
+    Parameters
+    ----------
+    bench_task_id : str
+        Bench task identifier.
+
+    Returns
+    -------
+    str
+        Parsed launch task identifier.
+
+    Notes
+    -----
+    Legacy and malformed bench IDs can still appear in older tests or manually
+    inserted rows. In those cases, this function falls back to removing the
+    ``bench:`` prefix so manifest writing remains best-effort.
+    """
+    try:
+        _kind, launch_task_id = _parse_bench_task_id(bench_task_id)
+        return launch_task_id
+    except ValueError:
+        return bench_task_id.removeprefix("bench:")
+
+
 def run_benchmark(
     benchmark_repo_path: Path,
     s3_bucket: str,
     task_id: str,
+    benchmark_kind: BenchmarkKind = BenchmarkKind.MD,
 ) -> None:
-    """Run MD benchmark and upload auditable artifacts to S3.
+    """Run a benchmark and upload auditable artifacts to S3.
 
-    Imports ``rbfe_benchmark`` and ``md_benchmark`` directly from the cloned
-    ``performance_benchmarks`` repo (``industry_benchmarks`` branch) and
-    invokes their Click entry-points via ``standalone_mode=False`` so that
-    errors propagate as Python exceptions rather than ``SystemExit``.
+    Imports benchmark scripts directly from the cloned ``performance_benchmarks``
+    repo (``industry_benchmarks`` branch) and invokes the selected Click
+    entry-point via ``standalone_mode=False`` so that failures propagate as
+    Python exceptions.
 
-    The benchmark input file, output file, and a manifest are uploaded to S3
-    under a deterministic run prefix partitioned by UTC date and task-id hash.
+    Input/output files, execution logs, and a manifest are uploaded to S3 under
+    a deterministic run prefix partitioned by UTC date and task-id hash.
 
     Parameters
     ----------
@@ -141,14 +234,20 @@ def run_benchmark(
         Name of the S3 bucket to upload result files to.
     task_id : str
         Task ID used to construct the deterministic hashed S3 key prefix.
+    benchmark_kind : BenchmarkKind, default=BenchmarkKind.MD
+        Benchmark workload kind to execute.
 
     Raises
     ------
     FileNotFoundError
         If the benchmark script directory or default input JSON does not exist.
     RuntimeError
-        If benchmark execution fails or input JSON cannot be parsed.
+        If benchmark execution fails, input/output JSON parsing fails, or S3
+        artifact upload fails.
     """
+    if isinstance(benchmark_kind, str):
+        benchmark_kind = _normalize_benchmark_kind(benchmark_kind)
+
     started_at = datetime.now(timezone.utc)
 
     benchmark_dir = benchmark_repo_path / "benchmark"
@@ -166,63 +265,93 @@ def run_benchmark(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Benchmark input JSON is invalid: {exc}") from exc
 
-    # Temporarily prepend the benchmark/ directory to sys.path so that
-    # rbfe_benchmark and md_benchmark can be imported directly.
-    sys.path.insert(0, str(benchmark_dir))
-    try:
-        import md_benchmark
-        # import rbfe_benchmark
-    finally:
-        sys.path.pop(0)
+    run_command, output_filename = _resolve_benchmark_runner(
+        benchmark_dir,
+        benchmark_kind,
+    )
 
     s3_prefix = _build_result_s3_prefix(task_id, started_at)
     s3_client = boto3.client("s3")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
+        output_file = tmpdir_path / output_filename
+        stdout_log_path = tmpdir_path / "stdout.log"
+        stderr_log_path = tmpdir_path / "stderr.log"
+        exception_traceback_path = tmpdir_path / "exception_traceback.log"
 
-        # rbfe_out = tmpdir_path / "rbfe_benchmark.out"
-        # try:
-        #     rbfe_benchmark.run_benchmark.main(
-        #         ["--input_file", str(input_file), "--output_file", str(rbfe_out)],
-        #         standalone_mode=False,
-        #     )
-        # except Exception as exc:
-        #     raise RuntimeError(f"RBFE benchmark failed: {exc}") from exc
-        #
-        md_out = tmpdir_path / "md_benchmark.out"
+        run_exception: Exception | None = None
+        exception_traceback_text: str | None = None
+
+        stdout_stream = io.StringIO()
+        stderr_stream = io.StringIO()
         try:
-            md_benchmark.run_benchmark.main(
-                ["--input_file", str(input_file), "--output_file", str(md_out)],
-                standalone_mode=False,
-            )
+            with (
+                contextlib.redirect_stdout(stdout_stream),
+                contextlib.redirect_stderr(stderr_stream),
+            ):
+                run_command.main(
+                    [
+                        "--input_file",
+                        str(input_file),
+                        "--output_file",
+                        str(output_file),
+                    ],
+                    standalone_mode=False,
+                )
         except Exception as exc:
-            raise RuntimeError(f"MD benchmark failed: {exc}") from exc
+            run_exception = exc
+            exception_traceback_text = traceback.format_exc()
+
+        if run_exception is None and not output_file.exists():
+            run_exception = RuntimeError(
+                f"{benchmark_kind.value.upper()} benchmark did not produce output file "
+                f"'{output_file.name}'."
+            )
+            exception_traceback_text = str(run_exception)
+
+        _write_text_file(stdout_log_path, stdout_stream.getvalue())
+        _write_text_file(stderr_log_path, stderr_stream.getvalue())
+        if exception_traceback_text is not None:
+            _write_text_file(exception_traceback_path, exception_traceback_text)
 
         output_json_parse_ok = False
         output_validation_ok = False
         output_validation_message = None
-        output_payload: object | None = None
-        try:
-            output_payload = json.loads(md_out.read_text(encoding="utf-8"))
-            output_json_parse_ok = True
-            output_validation_ok, output_validation_message = (
-                _validate_output_against_input(
-                    input_payload,
-                    output_payload,
+        output_s3_key: str | None = None
+        output_sha256: str | None = None
+        if output_file.exists():
+            output_s3_key = f"{s3_prefix}/output/{output_file.name}"
+            output_sha256 = _sha256_file(output_file)
+            try:
+                output_payload = json.loads(output_file.read_text(encoding="utf-8"))
+                output_json_parse_ok = True
+                output_validation_ok, output_validation_message = (
+                    _validate_output_against_input(
+                        input_payload,
+                        output_payload,
+                    )
                 )
-            )
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            output_validation_message = "Output file is not valid JSON."
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                output_validation_message = "Output file is not valid JSON."
+        else:
+            output_validation_message = "Output file was not produced."
 
         input_s3_key = f"{s3_prefix}/input/{input_file.name}"
-        output_s3_key = f"{s3_prefix}/output/{md_out.name}"
+        stdout_s3_key = f"{s3_prefix}/logs/stdout.log"
+        stderr_s3_key = f"{s3_prefix}/logs/stderr.log"
+        exception_traceback_s3_key: str | None = None
+        if exception_traceback_path.exists():
+            exception_traceback_s3_key = (
+                f"{s3_prefix}/logs/{exception_traceback_path.name}"
+            )
         manifest_s3_key = f"{s3_prefix}/manifest.json"
 
-        launch_task_id = task_id.removeprefix("bench:")
+        launch_task_id = _extract_launch_task_id(task_id)
         completed_at = datetime.now(timezone.utc)
         manifest = {
             "schema_version": _RESULT_MANIFEST_SCHEMA_VERSION,
+            "benchmark_kind": benchmark_kind.value,
             "bench_task_id": task_id,
             "launch_task_id": launch_task_id,
             "s3_bucket": s3_bucket,
@@ -233,12 +362,22 @@ def run_benchmark(
                 "sha256": _sha256_file(input_file),
             },
             "output": {
-                "source_name": md_out.name,
+                "source_name": output_file.name,
                 "s3_key": output_s3_key,
-                "sha256": _sha256_file(md_out),
+                "sha256": output_sha256,
                 "json_parse_ok": output_json_parse_ok,
                 "top_level_keys_match_input": output_validation_ok,
                 "validation_message": output_validation_message,
+            },
+            "logs": {
+                "stdout_s3_key": stdout_s3_key,
+                "stderr_s3_key": stderr_s3_key,
+                "exception_traceback_s3_key": exception_traceback_s3_key,
+            },
+            "execution": {
+                "success": run_exception is None,
+                "error_type": type(run_exception).__name__ if run_exception else None,
+                "error_message": str(run_exception) if run_exception else None,
             },
             "timestamps": {
                 "started_at_utc": _isoformat_utc(started_at),
@@ -249,6 +388,30 @@ def run_benchmark(
         manifest_path = tmpdir_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-        s3_client.upload_file(str(input_file), s3_bucket, input_s3_key)
-        s3_client.upload_file(str(md_out), s3_bucket, output_s3_key)
-        s3_client.upload_file(str(manifest_path), s3_bucket, manifest_s3_key)
+        try:
+            s3_client.upload_file(str(input_file), s3_bucket, input_s3_key)
+            s3_client.upload_file(str(stdout_log_path), s3_bucket, stdout_s3_key)
+            s3_client.upload_file(str(stderr_log_path), s3_bucket, stderr_s3_key)
+            if output_s3_key is not None:
+                s3_client.upload_file(str(output_file), s3_bucket, output_s3_key)
+            if exception_traceback_s3_key is not None:
+                s3_client.upload_file(
+                    str(exception_traceback_path),
+                    s3_bucket,
+                    exception_traceback_s3_key,
+                )
+            s3_client.upload_file(str(manifest_path), s3_bucket, manifest_s3_key)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to upload benchmark artifacts to s3://{s3_bucket}/{s3_prefix}: "
+                f"{exc}"
+            ) from exc
+
+        if run_exception is not None:
+            failure_prefix = f"{benchmark_kind.value.upper()} benchmark failed"
+            raise RuntimeError(
+                f"{failure_prefix}: {run_exception}. "
+                f"Manifest: s3://{s3_bucket}/{manifest_s3_key}. "
+                f"Stdout log: s3://{s3_bucket}/{stdout_s3_key}. "
+                f"Stderr log: s3://{s3_bucket}/{stderr_s3_key}."
+            ) from run_exception

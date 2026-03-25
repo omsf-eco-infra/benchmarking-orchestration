@@ -5,6 +5,11 @@ from pathlib import Path
 
 import click
 
+from .benchmark_kind import (
+    BenchmarkKind,
+    _benchmark_kind_choices,
+    _parse_benchmark_kind,
+)
 from .capabilities import (
     WorkerCapability,
     _parse_worker_capability,
@@ -30,7 +35,12 @@ from exorcist.models import TaskStatus
 
 from .analysis import fetch_and_analyze_results, print_results_table
 from .bench import run_benchmark
-from .task_id import _build_task_id, _parse_launch_task_id
+from .task_id import (
+    _build_bench_task_id,
+    _build_task_id,
+    _parse_bench_task_id,
+    _parse_launch_task_id,
+)
 from .tasks import TaskStatusDB
 
 
@@ -294,6 +304,15 @@ def worker(
             click.echo(f"Processed launch task '{task}' with instance '{instance_id}'.")
         case _:
             # Run the benchmark workload then report results.
+            try:
+                benchmark_kind, _launch_task_id = _parse_bench_task_id(task)
+            except ValueError as exc:
+                try:
+                    task_db.mark_task_completed(task, success=False)
+                except Exception:
+                    pass
+                raise click.ClickException(str(exc)) from exc
+
             s3_bucket = os.environ.get("S3_BUCKET")
             if not s3_bucket:
                 try:
@@ -310,6 +329,7 @@ def worker(
                     benchmark_repo_path=bench_repo,
                     s3_bucket=s3_bucket,
                     task_id=task,
+                    benchmark_kind=benchmark_kind,
                 )
             except Exception as exc:
                 try:
@@ -332,7 +352,8 @@ def worker(
                 ) from exc
 
             click.echo(
-                f"Processed bench task '{task}' with capability '{capability.value}'."
+                f"Processed bench task '{task}' (kind '{benchmark_kind.value}') "
+                f"with capability '{capability.value}'."
             )
 
 
@@ -354,6 +375,14 @@ def worker(
 @click.option("--db-path", default=None, show_default=False, type=str)
 @click.option("--max-tries", default=1, show_default=True, type=click.IntRange(min=1))
 @click.option(
+    "--benchmark-kind",
+    default=BenchmarkKind.MD.value,
+    show_default=True,
+    type=click.Choice(_benchmark_kind_choices(), case_sensitive=False),
+    callback=_parse_benchmark_kind,
+    help="Benchmark workload kind for the dependent bench task.",
+)
+@click.option(
     "--s3-bucket",
     default=None,
     show_default=False,
@@ -369,6 +398,7 @@ def create_launch_task(
     provider: str,
     db_path: str | None,
     max_tries: int,
+    benchmark_kind: BenchmarkKind,
     s3_bucket: str | None,
 ) -> None:
     """Create launch and benchmark task entries in TaskStatusDB.
@@ -389,6 +419,8 @@ def create_launch_task(
         Filesystem path to the task status database.
     max_tries : int
         Maximum total execution attempts for each created task.
+    benchmark_kind : BenchmarkKind
+        Benchmark workload kind for the dependent bench task.
     s3_bucket : str, optional
         S3 bucket name injected into the cloud-init template as ``S3_BUCKET``.
         Falls back to the ``BENCHMARK_S3_BUCKET`` environment variable.
@@ -432,7 +464,7 @@ def create_launch_task(
         normalized_ami_id,
         cloud_init_b64=cloud_init_b64,
     )
-    bench_task_id = f"bench:{task_id}"
+    bench_task_id = _build_bench_task_id(task_id, benchmark_kind)
 
     db_path_label = db_path if db_path is not None else "task_status.db"
 
