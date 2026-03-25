@@ -129,7 +129,7 @@ def _validate_output_against_input(
 def _resolve_benchmark_runner(
     benchmark_dir: Path,
     benchmark_kind: BenchmarkKind,
-) -> tuple[Any, str]:
+) -> tuple[Any, str, Any]:
     """Resolve the selected benchmark Click command and output filename.
 
     Parameters
@@ -141,8 +141,8 @@ def _resolve_benchmark_runner(
 
     Returns
     -------
-    tuple[Any, str]
-        Pair of ``(click_command, output_filename)``.
+    tuple[Any, str, Any]
+        Triple of ``(click_command, output_filename, benchmark_module)``.
 
     Raises
     ------
@@ -168,7 +168,90 @@ def _resolve_benchmark_runner(
             f"Benchmark module '{module_name}' does not expose a Click command "
             "named 'run_benchmark'."
         )
-    return run_command, output_filename
+    return run_command, output_filename, benchmark_module
+
+
+def _patch_rbfe_performance_reader_for_openfe_compat(benchmark_module: Any) -> None:
+    """Patch RBFE benchmark performance parsing for OpenFE protocol-unit changes.
+
+    Parameters
+    ----------
+    benchmark_module : Any
+        Imported benchmark module object (for example ``rbfe_benchmark``).
+
+    Notes
+    -----
+    ``openfe>=1.9`` can return multiple protocol-unit results per repeat.
+    Older ``rbfe_benchmark.py`` code assumes the first protocol-unit output
+    contains an ``"nc"`` key, which can raise ``KeyError`` when setup/analysis
+    units are ordered before run units. This patch replaces
+    ``benchmark_module.get_performance`` with a compatible implementation that
+    searches all unit outputs for ``"nc"``.
+    """
+    get_performance = getattr(benchmark_module, "get_performance", None)
+    if get_performance is None:
+        return
+
+    yaml_module = getattr(benchmark_module, "yaml", None)
+    if yaml_module is None:
+        return
+
+    def _compat_get_performance(dagres: Any, protocol: Any) -> float:
+        """Get final ns/day value from protocol results.
+
+        Parameters
+        ----------
+        dagres : Any
+            Protocol DAG execution result object.
+        protocol : Any
+            Protocol object exposing ``gather``.
+
+        Returns
+        -------
+        float
+            Final ``ns_per_day`` value from real-time analysis YAML.
+
+        Raises
+        ------
+        KeyError
+            If no protocol unit exposes an ``"nc"`` output key.
+        """
+        protocol_results = protocol.gather([dagres])
+        protocol_data = getattr(protocol_results, "data", {})
+
+        nc_path = None
+        observed_output_keys: set[str] = set()
+        for protocol_unit_results in protocol_data.values():
+            for unit_result in protocol_unit_results:
+                outputs = getattr(unit_result, "outputs", {})
+                if not isinstance(outputs, dict):
+                    continue
+                observed_output_keys.update(str(key) for key in outputs.keys())
+                candidate = outputs.get("nc")
+                if candidate is not None:
+                    nc_path = candidate
+                    break
+            if nc_path is not None:
+                break
+
+        if nc_path is None:
+            observed = ", ".join(sorted(observed_output_keys))
+            if not observed:
+                observed = "<none>"
+            raise KeyError(
+                "'nc' not found in gathered protocol unit outputs. "
+                f"Observed output keys: {observed}."
+            )
+
+        resolved_nc_path = (
+            nc_path.resolve() if hasattr(nc_path, "resolve") else Path(nc_path)
+        )
+        log_path = resolved_nc_path.parent / "simulation_real_time_analysis.yaml"
+        with log_path.open(encoding="utf-8") as stream:
+            data = yaml_module.safe_load(stream)
+        return data[-1]["timing_data"]["ns_per_day"]
+
+    benchmark_module.get_performance = _compat_get_performance
 
 
 def _write_text_file(file_path: Path, content: str) -> None:
@@ -265,10 +348,12 @@ def run_benchmark(
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Benchmark input JSON is invalid: {exc}") from exc
 
-    run_command, output_filename = _resolve_benchmark_runner(
+    run_command, output_filename, benchmark_module = _resolve_benchmark_runner(
         benchmark_dir,
         benchmark_kind,
     )
+    if benchmark_kind is BenchmarkKind.RBFE:
+        _patch_rbfe_performance_reader_for_openfe_compat(benchmark_module)
 
     s3_prefix = _build_result_s3_prefix(task_id, started_at)
     s3_client = boto3.client("s3")
