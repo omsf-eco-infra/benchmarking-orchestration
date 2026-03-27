@@ -327,32 +327,6 @@ def _write_text_file(file_path: Path, content: str) -> None:
     file_path.write_text(content, encoding="utf-8")
 
 
-def _extract_launch_task_id(bench_task_id: str) -> str:
-    """Extract a launch task ID from a benchmark task ID.
-
-    Parameters
-    ----------
-    bench_task_id : str
-        Bench task identifier.
-
-    Returns
-    -------
-    str
-        Parsed launch task identifier.
-
-    Notes
-    -----
-    Legacy and malformed bench IDs can still appear in older tests or manually
-    inserted rows. In those cases, this function falls back to removing the
-    ``bench:`` prefix so manifest writing remains best-effort.
-    """
-    try:
-        _kind, launch_task_id = _parse_bench_task_id(bench_task_id)
-        return launch_task_id
-    except ValueError:
-        return bench_task_id.removeprefix("bench:")
-
-
 def run_benchmark(
     benchmark_repo_path: Path,
     s3_bucket: str,
@@ -390,6 +364,17 @@ def run_benchmark(
     """
     if isinstance(benchmark_kind, str):
         benchmark_kind = _normalize_benchmark_kind(benchmark_kind)
+
+    try:
+        task_benchmark_kind, launch_task_id = _parse_bench_task_id(task_id)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if task_benchmark_kind != benchmark_kind:
+        raise RuntimeError(
+            "Bench task benchmark kind does not match execution kind. "
+            f"Task ID kind: '{task_benchmark_kind.value}', "
+            f"requested kind: '{benchmark_kind.value}'."
+        )
 
     started_at = datetime.now(timezone.utc)
 
@@ -492,7 +477,6 @@ def run_benchmark(
             )
         manifest_s3_key = f"{s3_prefix}/manifest.json"
 
-        launch_task_id = _extract_launch_task_id(task_id)
         completed_at = datetime.now(timezone.utc)
         manifest = {
             "schema_version": _RESULT_MANIFEST_SCHEMA_VERSION,

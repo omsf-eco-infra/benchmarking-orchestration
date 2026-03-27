@@ -128,8 +128,7 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
     Parameters
     ----------
     taskid : str
-        Bench task identifier in either ``bench:<benchmark_kind>:<launch_task_id>``
-        or legacy ``bench:<launch_task_id>`` format.
+        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format.
 
     Returns
     -------
@@ -144,7 +143,7 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
     expected_format_message = (
         "Invalid bench task ID format. Expected "
         "'bench:<benchmark_kind>:<launch_task_id>' "
-        "or legacy 'bench:<launch_task_id>'."
+        "where <benchmark_kind> is one of: md, rbfe."
     )
 
     if not taskid.startswith("bench:"):
@@ -155,15 +154,15 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
         raise ValueError(expected_format_message)
 
     candidate_kind, separator, candidate_launch_task_id = remainder.partition(":")
-    benchmark_kind = BenchmarkKind.MD
-    launch_task_id = remainder
-    if separator:
-        try:
-            benchmark_kind = _normalize_benchmark_kind(candidate_kind)
-            launch_task_id = candidate_launch_task_id
-        except ValueError:
-            benchmark_kind = BenchmarkKind.MD
-            launch_task_id = remainder
+    if not separator:
+        raise ValueError(expected_format_message)
+
+    try:
+        benchmark_kind = _normalize_benchmark_kind(candidate_kind)
+    except ValueError as exc:
+        raise ValueError(expected_format_message) from exc
+
+    launch_task_id = candidate_launch_task_id
 
     normalized_launch_task_id = launch_task_id.strip()
     if not normalized_launch_task_id:

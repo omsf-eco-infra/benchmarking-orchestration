@@ -148,7 +148,14 @@ def test_run_benchmark_raises_when_benchmark_dir_missing(tmp_path):
     (repo / "data" / "ross_dodecahedron_jacs.json").write_text("{}")
 
     with pytest.raises(FileNotFoundError, match="Benchmark script directory not found"):
-        run_benchmark(repo, s3_bucket="my-bucket", task_id="bench:us-east-1:g5.xlarge")
+        run_benchmark(
+            repo,
+            s3_bucket="my-bucket",
+            task_id=(
+                "bench:md:us-east-1:g5.xlarge:ami-1234:"
+                "123e4567-e89b-12d3-a456-426614174000"
+            ),
+        )
 
 
 def test_run_benchmark_raises_when_input_json_missing(tmp_path):
@@ -158,7 +165,33 @@ def test_run_benchmark_raises_when_input_json_missing(tmp_path):
     # input JSON not written
 
     with pytest.raises(FileNotFoundError, match="Benchmark input file not found"):
-        run_benchmark(repo, s3_bucket="my-bucket", task_id="bench:us-east-1:g5.xlarge")
+        run_benchmark(
+            repo,
+            s3_bucket="my-bucket",
+            task_id=(
+                "bench:md:us-east-1:g5.xlarge:ami-1234:"
+                "123e4567-e89b-12d3-a456-426614174000"
+            ),
+        )
+
+
+def test_run_benchmark_rejects_legacy_untyped_bench_task_id(tmp_path):
+    repo = _make_benchmark_repo(tmp_path)
+    benchmark_dir = repo / "benchmark"
+    _write_fake_benchmark_script(benchmark_dir, "md_benchmark.py")
+
+    with pytest.raises(RuntimeError, match="Invalid bench task ID format"):
+        run_benchmark(
+            repo,
+            s3_bucket="bucket",
+            task_id=(
+                "bench:us-east-1:g5.xlarge:ami-1234:"
+                "123e4567-e89b-12d3-a456-426614174000"
+            ),
+        )
+
+    for mod in ("md_benchmark",):
+        sys.modules.pop(mod, None)
 
 
 def test_run_benchmark_wraps_md_failure_as_runtime_error(tmp_path):
@@ -181,7 +214,14 @@ def test_run_benchmark_wraps_md_failure_as_runtime_error(tmp_path):
 
     with patch("benchmarking_orchestration.bench.boto3"):
         with pytest.raises(RuntimeError, match="MD benchmark failed"):
-            run_benchmark(repo, s3_bucket="bucket", task_id="bench:task")
+            run_benchmark(
+                repo,
+                s3_bucket="bucket",
+                task_id=(
+                    "bench:md:us-east-1:g5.xlarge:ami-1234:"
+                    "123e4567-e89b-12d3-a456-426614174000"
+                ),
+            )
 
     for mod in ("rbfe_benchmark", "md_benchmark"):
         sys.modules.pop(mod, None)
@@ -200,7 +240,7 @@ def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path)
             uploaded_by_key[key] = Path(filename).read_text(encoding="utf-8")
 
     task_id = (
-        "bench:us-east-1:g5.xlarge:ami-1234:"
+        "bench:md:us-east-1:g5.xlarge:ami-1234:"
         "IyEvYmluL2Jhc2gKZWNobyAiaGVsbG8iCg==:"
         "123e4567-e89b-12d3-a456-426614174000"
     )

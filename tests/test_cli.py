@@ -1089,7 +1089,7 @@ def test_worker_omits_key_name_when_ec2_key_name_env_var_not_set(monkeypatch):
 
 def test_worker_bench_task_calls_run_benchmark_and_marks_success(monkeypatch):
     runner = CliRunner()
-    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    taskid = "bench:md:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     store = {"mark_calls": [], "bench_calls": []}
 
     class _FakeTaskStatusDB:
@@ -1132,7 +1132,7 @@ def test_worker_bench_task_calls_run_benchmark_and_marks_success(monkeypatch):
 
 def test_worker_bench_task_uses_custom_bench_repo_path_flag(monkeypatch):
     runner = CliRunner()
-    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    taskid = "bench:md:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     store = {"mark_calls": [], "bench_calls": []}
 
     class _FakeTaskStatusDB:
@@ -1221,9 +1221,47 @@ def test_worker_bench_task_with_rbfe_task_id_passes_rbfe_kind(monkeypatch):
     assert store["mark_calls"] == [{"taskid": taskid, "success": True}]
 
 
-def test_worker_bench_task_marks_failure_when_run_benchmark_raises(monkeypatch):
+def test_worker_bench_task_rejects_legacy_untyped_task_id(monkeypatch):
     runner = CliRunner()
     taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    store = {"mark_calls": [], "bench_calls": []}
+
+    class _FakeTaskStatusDB:
+        @classmethod
+        def from_filename(cls, filename):
+            return cls()
+
+        def check_out_task_with_capability(self, capability):
+            return taskid
+
+        def mark_task_completed(self, taskid_value, success):
+            store["mark_calls"].append({"taskid": taskid_value, "success": success})
+
+    def _fake_run_benchmark(benchmark_repo_path, s3_bucket, task_id, benchmark_kind):
+        store["bench_calls"].append(
+            {
+                "benchmark_repo_path": benchmark_repo_path,
+                "s3_bucket": s3_bucket,
+                "task_id": task_id,
+                "benchmark_kind": benchmark_kind,
+            }
+        )
+
+    monkeypatch.setenv("S3_BUCKET", "test-results-bucket")
+    monkeypatch.setattr(cli_module, "TaskStatusDB", _FakeTaskStatusDB)
+    monkeypatch.setattr(cli_module, "run_benchmark", _fake_run_benchmark)
+
+    result = runner.invoke(cli_module.cli, ["worker", "--capability", "g5"])
+
+    assert result.exit_code != 0
+    assert "Invalid bench task ID format" in result.output
+    assert store["bench_calls"] == []
+    assert store["mark_calls"] == [{"taskid": taskid, "success": False}]
+
+
+def test_worker_bench_task_marks_failure_when_run_benchmark_raises(monkeypatch):
+    runner = CliRunner()
+    taskid = "bench:md:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     store = {"mark_calls": []}
 
     class _FakeTaskStatusDB:
@@ -1295,7 +1333,7 @@ def test_create_launch_task_with_rbfe_kind_creates_rbfe_bench_task(monkeypatch):
 
 def test_worker_bench_task_fails_when_s3_bucket_not_set(monkeypatch):
     runner = CliRunner()
-    taskid = "bench:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    taskid = "bench:md:us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     store = {"mark_calls": []}
 
     class _FakeTaskStatusDB:
