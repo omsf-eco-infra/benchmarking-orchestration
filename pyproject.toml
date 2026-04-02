@@ -1,6 +1,6 @@
 [project]
 authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
-dependencies = ["sqlalchemy-libsql>=0.2.0"]
+dependencies = ["sqlalchemy-libsql", "marimo[recommended]"]
 name = "benchmarking-orchestration"
 requires-python = ">= 3.11"
 version = "0.1.0"
@@ -18,15 +18,16 @@ benchmarking_orchestration = { path = ".", editable = true }
 exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 
 [tool.pixi.dependencies]
-click = ">=8.3.1,<9"
-boto3 = ">=1.42.46,<2"
+click = "*"
+boto3 = "*"
 python = "==3.13" # sqlalchemy-libsql does not work on Python 3.14 in testing
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
-dev = { features = ["test", "dev"]}
+dev = { features = ["test", "dev", "analysis"]}
 bench = {features = ["bench"]}
+analysis = {features = ["analysis"]}
 
 [tool.pixi.feature.test.dependencies]
 pytest-xdist = ">=3.8.0,<4"
@@ -50,5 +51,11 @@ system-requirements = {cuda = "12.8"}
 
 [tool.pixi.feature.bench.dependencies]
 cuda-version = ">=12,<13"
-openfe = "==1.9.1"
+openfe = ">=1.10.0,<2"
 pandas = ">=2.0,<3"
+
+[tool.marimo.package_management]
+manager = "pixi"
+
+[dependency-groups]
+analysis = ["marimo[recommended]", "obstore"]
