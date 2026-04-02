@@ -1,6 +1,6 @@
 [project]
 authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
-dependencies = ["sqlalchemy-libsql>=0.2.0"]
+dependencies = ["sqlalchemy-libsql>=0.2.0,<0.3"]
 name = "benchmarking-orchestration"
 requires-python = ">= 3.11"
 version = "0.1.0"
@@ -11,7 +11,7 @@ requires = ["hatchling"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["osx-64", "osx-arm64", "linux-64", "linux-aarch64"]
+platforms = ["osx-64", "osx-arm64", "linux-64"]
 
 [tool.pixi.pypi-dependencies]
 benchmarking_orchestration = { path = ".", editable = true }
@@ -19,7 +19,7 @@ exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 
 [tool.pixi.dependencies]
 click = ">=8.3.1,<9"
-boto3 = ">=1.42.46,<2"
+boto3 = ">=1.42.81,<2"
 python = "==3.13" # sqlalchemy-libsql does not work on Python 3.14 in testing
 
 [tool.pixi.environments]
@@ -32,14 +32,14 @@ analysis = {features = ["analysis"]}
 [tool.pixi.feature.test.dependencies]
 pytest-xdist = ">=3.8.0,<4"
 pytest = ">=9.0.2,<10"
-pytest-cov = ">=7.0.0,<8"
-moto = ">=5.1.21,<6"
+pytest-cov = ">=7.1.0,<8"
+moto = ">=5.1.22,<6"
 
 [tool.pixi.feature.test.tasks]
 test = "pytest -q -n auto"
 
 [tool.pixi.feature.dev.dependencies]
-ruff = "*"
+ruff = ">=0.15.8,<0.16"
 
 [tool.pixi.feature.dev.tasks]
 fmt = "ruff format"
@@ -50,12 +50,31 @@ platforms = ["linux-64", "osx-arm64"]
 system-requirements = {cuda = "12.8"}
 
 [tool.pixi.feature.bench.dependencies]
-cuda-version = ">=12,<13"
+cuda-version = ">=12.9,<13"
 openfe = ">=1.10.0,<2"
-pandas = ">=2.0,<3"
+pandas = ">=2.3.3,<3"
+
+[tool.feature.analysis]
+platforms = ["linux-64", "osx-arm64", "osx-64"]
+
+[tool.pixi.feature.analysis.tasks]
+check = "marimo check analysis/test.py"
+
+[tool.pixi.feature.analysis.dependencies]
+duckdb = ">=1.0.0"
+altair = ">=5.4.0"
+pyarrow = ">=23.0.1,<24"
+polars = ">=1.9.0"
+openai = ">=1.55.3"
+ruff = ">=0.15.8,<0.16"
+nbformat = ">=5.7.0"
+vegafusion = ">=2.0.0"
+vl-convert-python = ">=1.0.0"
+marimo = ">=0.21.1"
+sqlglot = ">=23.4"
 
 [tool.marimo.package_management]
 manager = "pixi"
 
-[dependency-groups]
-analysis = ["marimo[recommended]", "obstore"]
+# [dependency-groups]
+# analysis = ["marimo[recommended]", "obstore"]
