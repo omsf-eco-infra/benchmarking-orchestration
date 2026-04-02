@@ -1,6 +1,6 @@
 from __future__ import annotations
 
 from .capabilities import WorkerCapability
-from .commands import cli
+from .commands import app
 
-__all__ = ["cli", "WorkerCapability"]
+__all__ = ["app", "WorkerCapability"]

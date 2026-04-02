@@ -1,6 +1,9 @@
 [project]
 authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
-dependencies = ["sqlalchemy-libsql>=0.2.0,<0.3"]
+dependencies = [
+    "cyclopts>=4.10.1",
+    "sqlalchemy-libsql>=0.2.0,<0.3",
+]
 name = "benchmarking-orchestration"
 requires-python = ">= 3.11"
 version = "0.1.0"
@@ -18,7 +21,6 @@ benchmarking_orchestration = { path = ".", editable = true }
 exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 
 [tool.pixi.dependencies]
-click = ">=8.3.1,<9"
 boto3 = ">=1.42.81,<2"
 python = "==3.13" # sqlalchemy-libsql does not work on Python 3.14 in testing
 
@@ -40,6 +42,8 @@ test = "pytest -q -n auto"
 
 [tool.pixi.feature.dev.dependencies]
 ruff = ">=0.15.8,<0.16"
+ty = "*"
+
 
 [tool.pixi.feature.dev.tasks]
 fmt = "ruff format"
@@ -75,6 +79,12 @@ sqlglot = ">=23.4"
 
 [tool.marimo.package_management]
 manager = "pixi"
+
+[tool.ty.environment]
+python = ".pixi/envs/dev/bin/python"
+
+[dependency-groups]
+dev = ["salad-cloud-sdk>=0.9.0a16,<0.10"]
 
 # [dependency-groups]
 # analysis = ["marimo[recommended]", "obstore"]
