@@ -11,7 +11,7 @@ from .base import LaunchSpec
 DEFAULT_LAUNCH_AMI_ID = aws_helpers.DEFAULT_LAUNCH_AMI_ID
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class AwsProvider:
     """AWS provider adapter for launch lifecycle operations."""
 
