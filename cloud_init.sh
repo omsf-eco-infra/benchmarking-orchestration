@@ -38,5 +38,5 @@ export TURSO_DATABASE_URL="${TURSO_DATABASE_URL}"
 export TURSO_AUTH_TOKEN="${TURSO_AUTH_TOKEN}"
 export S3_BUCKET="${S3_BUCKET}"
 
-pixi run --manifest-path "\$CLI_PATH/pyproject.toml" -e bench python -m benchmarking_orchestration worker --capability "${GPU_CAPABILITY}" --bench-repo-path "\$BENCH_REPO_PATH"
+pixi run --manifest-path "\$CLI_PATH/pyproject.toml" -e bench python -m benchmarking_orchestration worker aws --capability "${GPU_CAPABILITY}" --bench-repo-path "\$BENCH_REPO_PATH"
 EOF
