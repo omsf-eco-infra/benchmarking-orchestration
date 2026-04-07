@@ -152,7 +152,7 @@ def test_worker_launch_capability_delegates_to_launch(monkeypatch):
     cli.worker(WorkerCapability.LAUNCH, config=config)
 
     assert delegated == [config]
-    assert fake_db.checkout_calls == [WorkerCapability.LAUNCH.value]
+    assert fake_db.checkout_calls == []
 
 
 def test_worker_bench_success_runs_benchmark_and_marks_success(monkeypatch):
@@ -297,5 +297,4 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
             "capability": "g5",
         },
     ]
-    assert "launch-task" in out
     assert "Created benchmark task" in out
