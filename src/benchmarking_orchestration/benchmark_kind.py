@@ -10,6 +10,7 @@ class BenchmarkKind(StrEnum):
 
     MD = "md"
     RBFE = "rbfe"
+    BOTH = "both"
 
 
 def _benchmark_kind_choices() -> tuple[str, ...]:

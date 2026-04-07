@@ -85,12 +85,6 @@ class AwsCLI(ProviderCLI):
             config = Config()
         task_db = config.task_db
 
-        task = task_db.check_out_task_with_capability(capability.value)
-
-        if task is None:
-            print(f"No available {capability.value} tasks.")
-            return
-
         match capability:
             case WorkerCapability.LAUNCH:
                 # launch
@@ -99,6 +93,11 @@ class AwsCLI(ProviderCLI):
                 self.launch(config=config)
                 return
             case _:
+                task = task_db.check_out_task_with_capability(capability.value)
+
+                if task is None:
+                    print(f"No available {capability.value} tasks.")
+                    return
                 # Run the benchmark workload then report results.
                 try:
                     benchmark_kind, _launch_task_id = _parse_bench_task_id(task)
@@ -160,7 +159,7 @@ class AwsCLI(ProviderCLI):
                 )
             ),
         ] = None,
-        benchmark_kind: BenchmarkKind = BenchmarkKind.MD,
+        benchmark_kind: BenchmarkKind = BenchmarkKind.BOTH,
         s3_bucket: Annotated[
             Optional[str], Parameter(env_var="BENCHMARK_S3_BUCKET")
         ] = None,
@@ -220,30 +219,50 @@ class AwsCLI(ProviderCLI):
             extra_vars=extra_vars,
         )
 
-        task_id = _build_task_id(
-            normalized_region,
-            normalized_instance_type,
-            normalized_ami_id,
-            cloud_init_b64=cloud_init_b64,
-        )
-        bench_task_id = _build_bench_task_id(task_id, benchmark_kind)
+        tasks = {}
+        if benchmark_kind is BenchmarkKind.BOTH:
+            launch_task_id_md = _build_task_id(
+                normalized_region,
+                normalized_instance_type,
+                normalized_ami_id,
+                cloud_init_b64=cloud_init_b64,
+            )
+            md_task = _build_bench_task_id(launch_task_id_md, BenchmarkKind.MD)
+            tasks[launch_task_id_md] = md_task
+            launch_task_id_rbfe = _build_task_id(
+                normalized_region,
+                normalized_instance_type,
+                normalized_ami_id,
+                cloud_init_b64=cloud_init_b64,
+            )
+            rbfe_task = _build_bench_task_id(launch_task_id_rbfe, BenchmarkKind.RBFE)
+            tasks[launch_task_id_rbfe] = rbfe_task
+        else:
+            task_id = _build_task_id(
+                normalized_region,
+                normalized_instance_type,
+                normalized_ami_id,
+                cloud_init_b64=cloud_init_b64,
+            )
+            bench_task_id = _build_bench_task_id(task_id, benchmark_kind)
+            tasks[task_id] = bench_task_id
 
-        task_db.add_task_with_capability(
-            taskid=task_id,
-            requirements=[],
-            max_tries=1,
-            capability=WorkerCapability.LAUNCH.value,
-        )
-        task_db.add_task_with_capability(
-            taskid=bench_task_id,
-            requirements=[task_id],
-            max_tries=1,
-            capability=instance_capability.value,
-        )
-        print(task_id)
-        print(
-            f"Created benchmark task for instance type '{normalized_instance_type}' with AMI '{normalized_ami_id}' in region '{normalized_region}'."
-        )
+        for launch_task, bench_task in tasks.items():
+            task_db.add_task_with_capability(
+                taskid=launch_task,
+                requirements=[],
+                max_tries=1,
+                capability=WorkerCapability.LAUNCH.value,
+            )
+            task_db.add_task_with_capability(
+                taskid=bench_task,
+                requirements=[launch_task],
+                max_tries=1,
+                capability=instance_capability.value,
+            )
+            print(
+                f"Created benchmark task for instance type '{normalized_instance_type}' with AMI '{normalized_ami_id}' in region '{normalized_region}'."
+            )
 
     def launch(self, *, config: Config | None = None):
         """
@@ -259,10 +278,6 @@ class AwsCLI(ProviderCLI):
             config = Config()
         task_db = config.task_db
 
-        task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
-        if config is None:
-            config = Config()
-        task_db = config.task_db
         try:
             task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
         except Exception as exc:
