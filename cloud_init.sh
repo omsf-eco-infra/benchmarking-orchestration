@@ -14,8 +14,8 @@ S3_BUCKET="@S3_BUCKET"
 trap 'shutdown -h now' EXIT
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y git nvtop
+apt-get update -y -o DPkg::Lock::Timeout=120
+apt-get install -y -o DPkg::Lock::Timeout=120 git nvtop
 
 sudo -u ubuntu -i bash <<EOF
 set -euo pipefail
