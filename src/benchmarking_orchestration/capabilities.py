@@ -10,9 +10,9 @@ class WorkerCapability(StrEnum):
 
     LAUNCH = "launch"
     G3 = "g3"
-    G4DN = "g4dn"
+    G4DN = "g4-dn"
     G6 = "g6"
-    G6E = "g6e"
+    G6E = "g6-e"
     G5 = "g5"
     P = "p"
     VT1 = "vt1"
@@ -50,6 +50,17 @@ def _resolve_bench_worker_capability(instance_type: str) -> WorkerCapability:
     instance_family = instance_type.split(".", maxsplit=1)[0]
     if instance_family.startswith("p"):
         return WorkerCapability.P
+
+    # EC2 instance families use compact names (e.g. ``g6e``, ``g4dn``)
+    # while enum values use kebab-case (``g6-e``, ``g4-dn``) to align
+    # with the CLI name transform applied by cyclopts.
+    _family_to_capability: dict[str, WorkerCapability] = {
+        "g4dn": WorkerCapability.G4DN,
+        "g6e": WorkerCapability.G6E,
+    }
+    if instance_family in _family_to_capability:
+        return _family_to_capability[instance_family]
+
     try:
         return WorkerCapability(instance_family)
     except ValueError as exc:
