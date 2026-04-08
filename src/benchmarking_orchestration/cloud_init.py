@@ -103,7 +103,7 @@ def _read_cloud_init_file_as_base64(
         Path to a cloud-init file.
     extra_vars : dict, optional
         Additional template variable overrides merged on top of the
-        environment-variable defaults (e.g. ``{"GPU_CAPABILITY": "g4dn"}``).
+        environment-variable defaults (e.g. ``{"GPU_CAPABILITY": "g4-dn"}``).
 
     Returns
     -------
