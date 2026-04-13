@@ -26,6 +26,7 @@ class LaunchSpec:
 
     instance_type: str | None = None
     ami_id: str | None = None
+    container_image: str | None = None
     region: str = "us-east-1"
     user_data: str | None = None
     key_name: str | None = None
