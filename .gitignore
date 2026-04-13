@@ -6,4 +6,8 @@ __pycache__
 .claude
 **/__marimo__
 analysis/layouts
+.agents
+.codex
+.pi
+.env.schema
 

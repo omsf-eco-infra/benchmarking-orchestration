@@ -211,7 +211,7 @@ def _(benchmark_costs, conn, mo):
         GROUP BY 1, 2
         ORDER BY metric_value DESC;
         """,
-        engine=conn
+        engine=conn,
     )
     return (median_md_cost,)
 
@@ -318,7 +318,7 @@ def _(conn, mo):
         LEFT JOIN manifests m
             USING (run_id);
         """,
-        engine=conn
+        engine=conn,
     )
     return
 
@@ -424,7 +424,7 @@ def _(conn, mo):
         GROUP BY 1, 2
         ORDER BY ns_per_dollar DESC;
         """,
-        engine=conn
+        engine=conn,
     )
     return (rbfe_benchmark_costs,)
 

@@ -124,7 +124,9 @@ def test_launch_processes_task_and_marks_success(monkeypatch):
 
 
 def test_launch_marks_failed_when_submit_raises(monkeypatch):
-    taskid = "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    )
 
     fake_db = _FakeTaskDB(checkout_results=[taskid, taskid])
     config = _FakeConfig(fake_db)
@@ -161,10 +163,14 @@ def test_worker_bench_success_runs_benchmark_and_marks_success(monkeypatch):
     config = _FakeConfig(fake_db)
     run_calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(aws_cli_module, "run_benchmark", lambda **kwargs: run_calls.append(kwargs))
+    monkeypatch.setattr(
+        aws_cli_module, "run_benchmark", lambda **kwargs: run_calls.append(kwargs)
+    )
     monkeypatch.setenv("S3_BUCKET", "benchmark-results")
 
-    AwsCLI().worker(WorkerCapability.G5, bench_repo_path=Path("/tmp/bench"), config=config)
+    AwsCLI().worker(
+        WorkerCapability.G5, bench_repo_path=Path("/tmp/bench"), config=config
+    )
 
     assert run_calls == [
         {
@@ -185,7 +191,9 @@ def test_worker_bench_missing_s3_bucket_marks_failure(monkeypatch):
     monkeypatch.delenv("S3_BUCKET", raising=False)
 
     with pytest.raises(ValueError, match="S3_BUCKET environment variable is required"):
-        AwsCLI().worker(WorkerCapability.G5, bench_repo_path=Path("/tmp/bench"), config=config)
+        AwsCLI().worker(
+            WorkerCapability.G5, bench_repo_path=Path("/tmp/bench"), config=config
+        )
 
     assert fake_db.mark_calls == [{"taskid": taskid, "success": False}]
 
@@ -195,7 +203,9 @@ def test_worker_bench_invalid_task_id_marks_failure():
     config = _FakeConfig(fake_db)
 
     with pytest.raises(ValueError, match="Invalid bench task ID format"):
-        AwsCLI().worker(WorkerCapability.G5, bench_repo_path=Path("/tmp/bench"), config=config)
+        AwsCLI().worker(
+            WorkerCapability.G5, bench_repo_path=Path("/tmp/bench"), config=config
+        )
 
     assert fake_db.mark_calls == [{"taskid": "bench:invalid", "success": False}]
 
@@ -247,8 +257,12 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
         "_read_cloud_init_file_as_base64",
         _fake_read_cloud_init_file_as_base64,
     )
-    monkeypatch.setattr(aws_cli_module, "_build_task_id", lambda *_args, **_kwargs: "launch-task")
-    monkeypatch.setattr(aws_cli_module, "_build_bench_task_id", lambda *_args, **_kwargs: "bench-task")
+    monkeypatch.setattr(
+        aws_cli_module, "_build_task_id", lambda *_args, **_kwargs: "launch-task"
+    )
+    monkeypatch.setattr(
+        aws_cli_module, "_build_bench_task_id", lambda *_args, **_kwargs: "bench-task"
+    )
 
     AwsCLI().create(
         instance_type=" G5.XLARGE ",
