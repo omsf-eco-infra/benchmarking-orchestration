@@ -9,14 +9,6 @@ from ..tasks import TaskStatusDB
 
 
 class ProviderCLI(Protocol):
-    """Protocol for provider-owned Cyclopts command registration.
-
-    Notes
-    -----
-    This protocol is intentionally CLI-focused and separate from the runtime
-    ``Provider`` protocol used for launch lifecycle operations.
-    """
-
     provider_name: str
 
     def register_cli(
