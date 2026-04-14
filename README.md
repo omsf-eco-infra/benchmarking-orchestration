@@ -233,17 +233,6 @@ When you pass `--cloud-init-file`, the file is rendered as a template using envi
 
 The included `Dockerfile` builds a CUDA-enabled Pixi image, installs the `bench` environment, and clones `performance_benchmarks` into `/app/performance_benchmarks`.
 
-## Analysis helpers
-
-There is no dedicated analysis CLI yet, but you can inspect uploaded manifests from Python:
-
-```python
-from benchmarking_orchestration.analysis import fetch_and_analyze_results, print_results_table
-
-records = fetch_and_analyze_results("my-benchmark-results")
-print_results_table(records)
-```
-
 ## Current limitations / notable behavior
 
 - `launch salad` currently checks queued launch tasks and GPU availability; it does **not** yet start benchmark execution by itself.
