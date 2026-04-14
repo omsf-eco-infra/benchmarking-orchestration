@@ -1,86 +1,263 @@
 # Benchmarking Orchestration
 
-Small CLI for scheduling AWS EC2 launch tasks and follow-on benchmark tasks.
+Provider-oriented CLI for queuing launch work, dispatching benchmark workers, and storing task state in an `exorcist` task database.
 
-## What it does
+The repository currently supports two provider flows:
 
-- Creates a launch task plus a dependent benchmark task in the task database.
-- Validates EC2 instance type and AMI before queuing tasks.
-- Runs workers by capability (`launch`, `g3`, `g4dn`, `g5`, `vt1`).
-- Launch worker checks out launch tasks and launches one EC2 instance per task.
-- Focuses on G/VT instance families (for example `g5.xlarge`, `vt1.3xlarge`).
+- **AWS EC2**: validate an instance type and AMI, queue a launch task plus one or more dependent benchmark tasks, launch the instance, then run MD/RBFE benchmarks and upload artifacts to S3.
+- **Salad Cloud**: create or reuse a container group for a GPU class, queue launch/benchmark tasks, check launch-time GPU availability, and run the same benchmark task flow.
+
+This repo is no longer just a small AWS quota helper; the main CLI is now:
+
+```bash
+pixi run python -m benchmarking_orchestration
+```
+
+## Current CLI shape
+
+```text
+create aws   ...
+create salad ...
+launch aws   ...
+launch salad ...
+worker aws   ...
+worker salad ...
+```
+
+The top-level groups are:
+
+- `create`: queue launch + benchmark tasks
+- `launch`: process queued launch tasks
+- `worker`: process benchmark tasks for a specific capability
+
+## What the repo does today
+
+### AWS flow
+
+- Validates EC2 instance types in the `g`, `vt`, and `p` families.
+- Validates the launch AMI in the selected region.
+- Queues one launch task and one dependent benchmark task per requested benchmark kind.
+- Supports `md`, `rbfe`, or `both` benchmark kinds.
+- Stores optional rendered cloud-init user-data in the launch task ID.
+- Launches one EC2 instance per launch task.
+- Runs benchmark tasks by worker capability (`g3`, `g4-dn`, `g5`, `g6`, `g6-e`, `p`, `vt1`).
+- Uploads benchmark inputs, outputs, logs, and a manifest to S3.
+
+### Salad flow
+
+- Uses the `salad-cloud-sdk` to look up GPU classes.
+- Creates or reuses a deterministic Salad container group for the selected GPU capability.
+- Queues launch and benchmark tasks in the same task DB.
+- Runs benchmark tasks for Salad GPU capabilities.
+
+### Result handling
+
+Benchmark workers upload artifacts to:
+
+```text
+runs/<yyyy-mm-dd>/<sha256(task_id)>/
+```
+
+Each run includes:
+
+- the benchmark input JSON
+- the benchmark output JSON
+- `stdout.log`
+- `stderr.log`
+- `exception_traceback.log` when execution fails
+- `manifest.json`
+
+There are also Python helpers in `src/benchmarking_orchestration/analysis.py` for reading manifests from S3 and printing a summary table.
 
 ## Requirements
 
-- Python 3.11+
-- `pixi` (used for environment and task execution)
-- AWS credentials available in your shell (`AWS_PROFILE` or standard AWS env vars)
+- `pixi`
+- Python 3.11+ at the package level
+- AWS credentials when using the AWS provider
+- Salad credentials when using the Salad provider
 
-## Quick start
+The pinned Pixi environment currently uses Python 3.13.
+
+## Install
+
+For normal CLI use:
 
 ```bash
 pixi install
 ```
 
-Create a launch task:
+If you want to run benchmark workloads locally, install the bench environment too:
 
 ```bash
-pixi run python -m benchmarking_orchestration create-launch-task \
-  --instance-type g5.xlarge
+pixi install -e bench
 ```
 
-Run the worker to process launch tasks:
+## External dependency: benchmark repo
+
+Benchmark execution expects a checked-out copy of the OpenFE benchmark repo and imports benchmark scripts directly from it.
+
+Expected layout:
+
+- benchmark scripts under `benchmark/`
+- benchmark input JSON under `data/`
+
+The repo is typically cloned from:
 
 ```bash
-pixi run python -m benchmarking_orchestration worker --capability launch
+git clone -b industry_benchmarks --single-branch \
+  https://github.com/OpenFreeEnergy/performance_benchmarks.git
 ```
 
-Show CLI help:
+By default, workers look for it at:
+
+```text
+/opt/dlami/nvme/performance_benchmarks
+```
+
+Override that with `--bench-repo-path` or `BENCHMARK_REPO_PATH`.
+
+## Task database
+
+Task state is stored in `benchmarking_orchestration.tasks.TaskStatusDB`, which extends `exorcist.TaskStatusDB` with per-task capabilities.
+
+Database selection works like this:
+
+- if `--db` is provided, use that local SQLite file
+- otherwise, if `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are set, use Turso
+- otherwise, fall back to local `task_status.db`
+
+## Common environment variables
+
+### Shared / task-db
+
+- `TURSO_DATABASE_URL`
+- `TURSO_AUTH_TOKEN`
+- `BENCHMARK_REPO_PATH`
+
+### AWS
+
+- `AWS_PROFILE` or the usual AWS credential chain
+- `EC2_KEY_NAME` for optional SSH/debug access on launched instances
+- `EC2_IAM_INSTANCE_PROFILE` for the launched EC2 instance
+- `BENCHMARK_S3_BUCKET` as a default for `create aws --s3-bucket`
+- `S3_BUCKET` at benchmark worker runtime
+
+### Salad
+
+- `SALAD_API_KEY`
+- `SALAD_ORG_NAME`
+- `SALAD_WORKER_CAPABILITY` for `worker salad`
+- `S3_BUCKET` at benchmark worker runtime
+
+## Quick start: AWS
+
+Queue AWS launch + benchmark tasks:
+
+```bash
+pixi run python -m benchmarking_orchestration create aws g5.xlarge \
+  --region us-east-1 \
+  --cloud-init-file cloud_init.sh \
+  --benchmark-kind both \
+  --s3-bucket my-benchmark-results
+```
+
+Process one queued launch task:
+
+```bash
+pixi run python -m benchmarking_orchestration launch aws
+```
+
+Run a benchmark worker locally for a capability:
+
+```bash
+S3_BUCKET=my-benchmark-results \
+pixi run -e bench python -m benchmarking_orchestration worker aws g5 \
+  --bench-repo-path /path/to/performance_benchmarks
+```
+
+Show help:
 
 ```bash
 pixi run python -m benchmarking_orchestration --help
+pixi run python -m benchmarking_orchestration create aws --help
+pixi run python -m benchmarking_orchestration worker aws --help
 ```
 
-## Common options
+## Quick start: Salad
 
-- `--region` (default: `us-east-1`)
-- `--ami-id` (default: `ami-0ec16471888b25545`)
-- `--cloud-init-file` (optional path to a cloud-init script for EC2 user-data)
-- `--db-path` (optional; when omitted, uses Turso if `TURSO_DATABASE_URL` and
-  `TURSO_AUTH_TOKEN` are set, otherwise `task_status.db`)
-- `--max-tries` for retry attempts on created tasks
+Queue Salad work:
 
-Task IDs are created in this format:
+```bash
+pixi run python -m benchmarking_orchestration create salad rtxa5000 \
+  ghcr.io/openforcefield/benchmark-worker:latest \
+  --benchmark-kind md \
+  --salad-api-key "$SALAD_API_KEY" \
+  --salad-org-name "$SALAD_ORG_NAME"
+```
 
-- `<region>:<instance_type>:<ami_id>:<uuid4>`
-- `<region>:<instance_type>:<ami_id>:<cloud_init_b64>:<uuid4>` when `--cloud-init-file` is set
+Check launch-time GPU availability for the next queued Salad launch task:
 
-## Assumptions
+```bash
+pixi run python -m benchmarking_orchestration launch salad \
+  --salad-api-key "$SALAD_API_KEY" \
+  --salad-org-name "$SALAD_ORG_NAME"
+```
 
-- Launch scheduling is limited to G/VT instance families.
-- Cloud-init payloads are stored inside task IDs as base64 and must decode to UTF-8 text.
-- `create-launch-task` always creates both launch and benchmark task records.
-- Benchmark worker capabilities are family-based (`g3`, `g4dn`, `g5`, `vt1`), and
-  the non-launch worker path is currently a placeholder.
+Run a Salad benchmark worker locally:
 
-## Turso
+```bash
+S3_BUCKET=my-benchmark-results \
+pixi run -e bench python -m benchmarking_orchestration worker salad rtxa5000 \
+  --bench-repo-path /path/to/performance_benchmarks
+```
 
-Turso support is used to back `TaskStatusDB` with a remote database instead of a
-local `task_status.db` file.
+## Cloud-init
 
-- Purpose: share task queue state across multiple machines/workers and avoid
-  relying on one local SQLite file.
-- Auto-selection: when `--db-path` is omitted and both `TURSO_DATABASE_URL` and
-  `TURSO_AUTH_TOKEN` are set, the CLI connects to Turso.
-- Local override: when `--db-path` is provided, the CLI uses that local DB file
-  path instead.
+`cloud_init.sh` is an example AWS bootstrap script. It currently:
+
+- requires Turso credentials, `GPU_CAPABILITY`, and `S3_BUCKET`
+- installs Pixi on the instance
+- clones this repo
+- clones `performance_benchmarks` (`industry_benchmarks` branch)
+- installs the `bench` environment
+- runs `worker aws --capability <GPU_CAPABILITY>`
+- shuts the instance down on exit
+
+When you pass `--cloud-init-file`, the file is rendered as a template using environment variables plus extra values injected by the CLI, such as:
+
+- `GPU_CAPABILITY`
+- `S3_BUCKET`
+- lowercase Turso aliases (`turso_database_url`, `turso_auth_token`)
+
+## Docker
+
+The included `Dockerfile` builds a CUDA-enabled Pixi image, installs the `bench` environment, and clones `performance_benchmarks` into `/app/performance_benchmarks`.
+
+## Analysis helpers
+
+There is no dedicated analysis CLI yet, but you can inspect uploaded manifests from Python:
+
+```python
+from benchmarking_orchestration.analysis import fetch_and_analyze_results, print_results_table
+
+records = fetch_and_analyze_results("my-benchmark-results")
+print_results_table(records)
+```
+
+## Current limitations / notable behavior
+
+- `launch salad` currently checks queued launch tasks and GPU availability; it does **not** yet start benchmark execution by itself.
+- Benchmark workers require `S3_BUCKET` in the runtime environment.
+- AWS launch task IDs may embed base64-encoded cloud-init content.
+- Benchmark execution imports code directly from the external `performance_benchmarks` checkout.
+- Result analysis is currently a Python API, not a first-class CLI command.
 
 ## Development
 
 Run tests:
 
 ```bash
-pixi run --environment dev test
+pixi run test
 ```
 
 Format:
@@ -94,9 +271,3 @@ Lint:
 ```bash
 pixi run check
 ```
-
-## Notes
-
-- Service quotas and EC2 validation are region-specific.
-- Ensure IAM permissions include EC2 and Service Quotas read access as needed.
-- Output and exact behavior can vary by AWS account configuration.
