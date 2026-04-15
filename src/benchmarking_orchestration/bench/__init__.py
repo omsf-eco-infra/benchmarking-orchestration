@@ -16,7 +16,7 @@ from typing import Any
 import boto3
 
 from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
-from ..task_id import _parse_bench_task_id
+from ..task_id import _parse_bench_task_metadata
 
 
 #: Default benchmark input JSON, relative to the data/ directory of the
@@ -617,7 +617,7 @@ def run_benchmark(
 
     try:
         task_benchmark_kind, task_mps_process_count, launch_task_id = (
-            _parse_bench_task_id(task_id)
+            _parse_bench_task_metadata(task_id)
         )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc

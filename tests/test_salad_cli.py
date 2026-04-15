@@ -329,21 +329,13 @@ def test_worker_gpu_capability_runs_benchmark(monkeypatch, capsys):
 
     run_benchmark_calls = []
 
-    def fake_run_benchmark(
-        *,
-        benchmark_repo_path,
-        s3_bucket,
-        task_id,
-        benchmark_kind,
-        mps_process_count,
-    ):
+    def fake_run_benchmark(*, benchmark_repo_path, s3_bucket, task_id, benchmark_kind):
         run_benchmark_calls.append(
             {
                 "benchmark_repo_path": benchmark_repo_path,
                 "s3_bucket": s3_bucket,
                 "task_id": task_id,
                 "benchmark_kind": benchmark_kind,
-                "mps_process_count": mps_process_count,
             }
         )
 
@@ -367,7 +359,6 @@ def test_worker_gpu_capability_runs_benchmark(monkeypatch, capsys):
         == "bench:md:salad:RTX A5000 (24 GB):my-image:12345678-1234-5678-1234-567812345678"
     )
     assert run_benchmark_calls[0]["benchmark_kind"] == BenchmarkKind.MD
-    assert run_benchmark_calls[0]["mps_process_count"] == 1
     assert fake_db.mark_completed_calls == [
         (
             "bench:md:salad:RTX A5000 (24 GB):my-image:12345678-1234-5678-1234-567812345678",

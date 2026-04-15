@@ -138,8 +138,8 @@ def _build_bench_task_id(
     return f"bench:{benchmark_kind.value}:mps:{mps_process_count}:{launch_task_id}"
 
 
-def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, int, str]:
-    """Parse a benchmark task identifier into kind and launch task ID.
+def _parse_bench_task_metadata(taskid: str) -> tuple[BenchmarkKind, int, str]:
+    """Parse a benchmark task identifier into full execution metadata.
 
     Parameters
     ----------
@@ -204,3 +204,29 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, int, str]:
 
     _parse_launch_task_id(normalized_launch_task_id)
     return benchmark_kind, mps_process_count, normalized_launch_task_id
+
+
+def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
+    """Parse a benchmark task identifier into kind and launch task ID.
+
+    Parameters
+    ----------
+    taskid : str
+        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format,
+        or ``bench:<benchmark_kind>:mps:<mps_process_count>:<launch_task_id>``
+        format.
+
+    Returns
+    -------
+    tuple[BenchmarkKind, str]
+        Parsed ``(benchmark_kind, launch_task_id)`` values.
+
+    Raises
+    ------
+    ValueError
+        If task identifier is malformed.
+    """
+    benchmark_kind, _mps_process_count, launch_task_id = _parse_bench_task_metadata(
+        taskid
+    )
+    return benchmark_kind, launch_task_id

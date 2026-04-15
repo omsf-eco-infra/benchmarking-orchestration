@@ -19,7 +19,7 @@ from ..normalization import (
 from ..task_id import (
     _build_bench_task_id,
     _build_task_id,
-    _parse_bench_task_id,
+    _parse_bench_task_metadata,
     _parse_launch_task_id,
 )
 from . import LaunchSpec, get_provider
@@ -101,7 +101,7 @@ class AwsCLI(ProviderCLI):
                 # Run the benchmark workload then report results.
                 try:
                     benchmark_kind, mps_process_count, _launch_task_id = (
-                        _parse_bench_task_id(task)
+                        _parse_bench_task_metadata(task)
                     )
                 except ValueError as exc:
                     task_db.mark_task_completed(task, success=False)
