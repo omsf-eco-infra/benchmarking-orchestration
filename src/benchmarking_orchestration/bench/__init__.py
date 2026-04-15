@@ -332,6 +332,7 @@ def run_benchmark(
     s3_bucket: str,
     task_id: str,
     benchmark_kind: BenchmarkKind = BenchmarkKind.MD,
+    mps_process_count: int = 1,
 ) -> None:
     """Run a benchmark and upload auditable artifacts to S3.
 
@@ -353,6 +354,8 @@ def run_benchmark(
         Task ID used to construct the deterministic hashed S3 key prefix.
     benchmark_kind : BenchmarkKind, default=BenchmarkKind.MD
         Benchmark workload kind to execute.
+    mps_process_count : int, default=1
+        Number of concurrent benchmark subprocesses requested by the worker.
 
     Raises
     ------
@@ -365,8 +368,13 @@ def run_benchmark(
     if isinstance(benchmark_kind, str):
         benchmark_kind = _normalize_benchmark_kind(benchmark_kind)
 
+    if mps_process_count < 1:
+        raise RuntimeError("mps_process_count must be greater than or equal to 1.")
+
     try:
-        task_benchmark_kind, launch_task_id = _parse_bench_task_id(task_id)
+        task_benchmark_kind, task_mps_process_count, launch_task_id = (
+            _parse_bench_task_id(task_id)
+        )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     if task_benchmark_kind != benchmark_kind:
@@ -374,6 +382,12 @@ def run_benchmark(
             "Bench task benchmark kind does not match execution kind. "
             f"Task ID kind: '{task_benchmark_kind.value}', "
             f"requested kind: '{benchmark_kind.value}'."
+        )
+    if task_mps_process_count != mps_process_count:
+        raise RuntimeError(
+            "Bench task MPS process count does not match execution configuration. "
+            f"Task ID count: '{task_mps_process_count}', "
+            f"requested count: '{mps_process_count}'."
         )
 
     started_at = datetime.now(timezone.utc)

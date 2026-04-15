@@ -412,7 +412,9 @@ class SaladCLI(ProviderCLI):
                     return
 
                 try:
-                    benchmark_kind, _launch_task_id = _parse_bench_task_id(task)
+                    benchmark_kind, mps_process_count, _launch_task_id = (
+                        _parse_bench_task_id(task)
+                    )
                 except ValueError as exc:
                     task_db.mark_task_completed(task, success=False)
                     raise exc
@@ -434,6 +436,7 @@ class SaladCLI(ProviderCLI):
                         s3_bucket=s3_bucket,
                         task_id=task,
                         benchmark_kind=benchmark_kind,
+                        mps_process_count=mps_process_count,
                     )
                 except Exception as exc:
                     try:

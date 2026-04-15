@@ -178,6 +178,7 @@ def test_worker_bench_success_runs_benchmark_and_marks_success(monkeypatch):
             "s3_bucket": "benchmark-results",
             "task_id": taskid,
             "benchmark_kind": BenchmarkKind.MD,
+            "mps_process_count": 1,
         }
     ]
     assert fake_db.mark_calls == [{"taskid": taskid, "success": True}]
@@ -216,6 +217,7 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     instance_validation_calls: list[dict[str, str]] = []
     ami_validation_calls: list[dict[str, str]] = []
     cloud_init_calls: list[dict[str, object]] = []
+    bench_task_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         aws_cli_module,
@@ -260,8 +262,19 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     monkeypatch.setattr(
         aws_cli_module, "_build_task_id", lambda *_args, **_kwargs: "launch-task"
     )
+
+    def _fake_build_bench_task_id(launch_task_id, benchmark_kind, mps_process_count=1):
+        bench_task_calls.append(
+            {
+                "launch_task_id": launch_task_id,
+                "benchmark_kind": benchmark_kind,
+                "mps_process_count": mps_process_count,
+            }
+        )
+        return "bench-task"
+
     monkeypatch.setattr(
-        aws_cli_module, "_build_bench_task_id", lambda *_args, **_kwargs: "bench-task"
+        aws_cli_module, "_build_bench_task_id", _fake_build_bench_task_id
     )
 
     AwsCLI().create(
@@ -297,6 +310,13 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
             },
         }
     ]
+    assert bench_task_calls == [
+        {
+            "launch_task_id": "launch-task",
+            "benchmark_kind": BenchmarkKind.MD,
+            "mps_process_count": 1,
+        }
+    ]
     assert fake_db.add_calls == [
         {
             "taskid": "launch-task",
@@ -312,3 +332,129 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
         },
     ]
     assert "Created benchmark task" in out
+
+
+def test_create_benchmark_task_uses_requested_mps_process_count(monkeypatch):
+    fake_db = _FakeTaskDB()
+    config = _FakeConfig(fake_db)
+    bench_task_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        aws_cli_module,
+        "validate_launch_instance_type",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "validate_launch_ami",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_resolve_bench_worker_capability",
+        lambda _instance_type: WorkerCapability.G5,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_read_cloud_init_file_as_base64",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module, "_build_task_id", lambda *_args, **_kwargs: "launch-task"
+    )
+
+    def _fake_build_bench_task_id(launch_task_id, benchmark_kind, mps_process_count=1):
+        bench_task_calls.append(
+            {
+                "launch_task_id": launch_task_id,
+                "benchmark_kind": benchmark_kind,
+                "mps_process_count": mps_process_count,
+            }
+        )
+        return f"bench-task-{benchmark_kind.value}"
+
+    monkeypatch.setattr(
+        aws_cli_module, "_build_bench_task_id", _fake_build_bench_task_id
+    )
+
+    AwsCLI().create(
+        instance_type="g5.xlarge",
+        benchmark_kind=BenchmarkKind.RBFE,
+        mps_process_count=3,
+        config=config,
+    )
+
+    assert bench_task_calls == [
+        {
+            "launch_task_id": "launch-task",
+            "benchmark_kind": BenchmarkKind.RBFE,
+            "mps_process_count": 3,
+        }
+    ]
+
+
+def test_create_both_tasks_use_requested_mps_process_count(monkeypatch):
+    fake_db = _FakeTaskDB()
+    config = _FakeConfig(fake_db)
+    build_task_ids = iter(["launch-task-md", "launch-task-rbfe"])
+    bench_task_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        aws_cli_module,
+        "validate_launch_instance_type",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "validate_launch_ami",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_resolve_bench_worker_capability",
+        lambda _instance_type: WorkerCapability.G5,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_read_cloud_init_file_as_base64",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_build_task_id",
+        lambda *_args, **_kwargs: next(build_task_ids),
+    )
+
+    def _fake_build_bench_task_id(launch_task_id, benchmark_kind, mps_process_count=1):
+        bench_task_calls.append(
+            {
+                "launch_task_id": launch_task_id,
+                "benchmark_kind": benchmark_kind,
+                "mps_process_count": mps_process_count,
+            }
+        )
+        return f"bench-task-{benchmark_kind.value}"
+
+    monkeypatch.setattr(
+        aws_cli_module, "_build_bench_task_id", _fake_build_bench_task_id
+    )
+
+    AwsCLI().create(
+        instance_type="g5.xlarge",
+        benchmark_kind=BenchmarkKind.BOTH,
+        mps_process_count=4,
+        config=config,
+    )
+
+    assert bench_task_calls == [
+        {
+            "launch_task_id": "launch-task-md",
+            "benchmark_kind": BenchmarkKind.MD,
+            "mps_process_count": 4,
+        },
+        {
+            "launch_task_id": "launch-task-rbfe",
+            "benchmark_kind": BenchmarkKind.RBFE,
+            "mps_process_count": 4,
+        },
+    ]

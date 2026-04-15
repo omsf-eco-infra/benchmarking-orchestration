@@ -104,6 +104,7 @@ def _parse_launch_task_id(taskid: str) -> tuple[str, str, str, str | None]:
 def _build_bench_task_id(
     launch_task_id: str,
     benchmark_kind: BenchmarkKind = BenchmarkKind.MD,
+    mps_process_count: int = 1,
 ) -> str:
     """Build a benchmark task identifier that encodes benchmark kind.
 
@@ -113,27 +114,44 @@ def _build_bench_task_id(
         Launch task identifier this bench task depends on.
     benchmark_kind : BenchmarkKind, default=BenchmarkKind.MD
         Benchmark workload kind to execute.
+    mps_process_count : int, default=1
+        Number of MPS benchmark subprocesses encoded in the task identifier.
 
     Returns
     -------
     str
-        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format.
+        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format
+        when ``mps_process_count`` is ``1``, otherwise
+        ``bench:<benchmark_kind>:mps:<mps_process_count>:<launch_task_id>``.
+
+    Raises
+    ------
+    ValueError
+        If ``mps_process_count`` is less than ``1``.
     """
-    return f"bench:{benchmark_kind.value}:{launch_task_id}"
+    if mps_process_count < 1:
+        raise ValueError("mps_process_count must be greater than or equal to 1.")
+
+    if mps_process_count == 1:
+        return f"bench:{benchmark_kind.value}:{launch_task_id}"
+
+    return f"bench:{benchmark_kind.value}:mps:{mps_process_count}:{launch_task_id}"
 
 
-def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
+def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, int, str]:
     """Parse a benchmark task identifier into kind and launch task ID.
 
     Parameters
     ----------
     taskid : str
-        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format.
+        Bench task identifier in ``bench:<benchmark_kind>:<launch_task_id>`` format,
+        or ``bench:<benchmark_kind>:mps:<mps_process_count>:<launch_task_id>``
+        format.
 
     Returns
     -------
-    tuple[BenchmarkKind, str]
-        Parsed ``(benchmark_kind, launch_task_id)`` values.
+    tuple[BenchmarkKind, int, str]
+        Parsed ``(benchmark_kind, mps_process_count, launch_task_id)`` values.
 
     Raises
     ------
@@ -143,6 +161,7 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
     expected_format_message = (
         "Invalid bench task ID format. Expected "
         "'bench:<benchmark_kind>:<launch_task_id>' "
+        "or 'bench:<benchmark_kind>:mps:<mps_process_count>:<launch_task_id>' "
         "where <benchmark_kind> is one of: md, rbfe."
     )
 
@@ -153,7 +172,7 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
     if not remainder:
         raise ValueError(expected_format_message)
 
-    candidate_kind, separator, candidate_launch_task_id = remainder.partition(":")
+    candidate_kind, separator, trailing_metadata = remainder.partition(":")
     if not separator:
         raise ValueError(expected_format_message)
 
@@ -162,11 +181,26 @@ def _parse_bench_task_id(taskid: str) -> tuple[BenchmarkKind, str]:
     except ValueError as exc:
         raise ValueError(expected_format_message) from exc
 
-    launch_task_id = candidate_launch_task_id
+    launch_task_id = trailing_metadata
+    mps_process_count = 1
+    if trailing_metadata.startswith("mps:"):
+        count_and_launch = trailing_metadata.removeprefix("mps:")
+        count_text, nested_separator, candidate_launch_task_id = (
+            count_and_launch.partition(":")
+        )
+        if not nested_separator or not count_text.strip():
+            raise ValueError(expected_format_message)
+        try:
+            mps_process_count = int(count_text)
+        except ValueError as exc:
+            raise ValueError(expected_format_message) from exc
+        if mps_process_count < 1:
+            raise ValueError(expected_format_message)
+        launch_task_id = candidate_launch_task_id
 
     normalized_launch_task_id = launch_task_id.strip()
     if not normalized_launch_task_id:
         raise ValueError(expected_format_message)
 
     _parse_launch_task_id(normalized_launch_task_id)
-    return benchmark_kind, normalized_launch_task_id
+    return benchmark_kind, mps_process_count, normalized_launch_task_id

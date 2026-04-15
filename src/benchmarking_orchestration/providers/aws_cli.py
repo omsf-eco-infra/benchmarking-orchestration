@@ -100,7 +100,9 @@ class AwsCLI(ProviderCLI):
                     return
                 # Run the benchmark workload then report results.
                 try:
-                    benchmark_kind, _launch_task_id = _parse_bench_task_id(task)
+                    benchmark_kind, mps_process_count, _launch_task_id = (
+                        _parse_bench_task_id(task)
+                    )
                 except ValueError as exc:
                     task_db.mark_task_completed(task, success=False)
                     raise exc
@@ -122,6 +124,7 @@ class AwsCLI(ProviderCLI):
                         s3_bucket=s3_bucket,
                         task_id=task,
                         benchmark_kind=benchmark_kind,
+                        mps_process_count=mps_process_count,
                     )
                 except Exception as exc:
                     try:
@@ -160,6 +163,7 @@ class AwsCLI(ProviderCLI):
             ),
         ] = None,
         benchmark_kind: BenchmarkKind = BenchmarkKind.BOTH,
+        mps_process_count: int = 1,
         s3_bucket: Annotated[
             Optional[str], Parameter(env_var="BENCHMARK_S3_BUCKET")
         ] = None,
@@ -193,6 +197,9 @@ class AwsCLI(ProviderCLI):
             Filesystem path to the task status database.
         benchmark_kind : BenchmarkKind
             Benchmark workload kind for the dependent bench task.
+        mps_process_count : int, default=1
+            Number of concurrent benchmark subprocesses to encode for bench tasks.
+            A value of ``1`` preserves current single-process behavior.
         s3_bucket : str, optional
             S3 bucket name injected into the cloud-init template as ``S3_BUCKET``.
             Falls back to the ``BENCHMARK_S3_BUCKET`` environment variable.
@@ -206,6 +213,9 @@ class AwsCLI(ProviderCLI):
         normalized_instance_type = _normalize_instance_type(instance_type)
         normalized_region = _normalize_region(region)
         normalized_ami_id = _normalize_ami_id(ami_id)
+
+        if mps_process_count < 1:
+            raise ValueError("mps_process_count must be greater than or equal to 1.")
 
         validate_launch_instance_type(normalized_instance_type, normalized_region)
         validate_launch_ami(normalized_ami_id, normalized_region)
@@ -227,7 +237,11 @@ class AwsCLI(ProviderCLI):
                 normalized_ami_id,
                 cloud_init_b64=cloud_init_b64,
             )
-            md_task = _build_bench_task_id(launch_task_id_md, BenchmarkKind.MD)
+            md_task = _build_bench_task_id(
+                launch_task_id_md,
+                BenchmarkKind.MD,
+                mps_process_count=mps_process_count,
+            )
             tasks[launch_task_id_md] = md_task
             launch_task_id_rbfe = _build_task_id(
                 normalized_region,
@@ -235,7 +249,11 @@ class AwsCLI(ProviderCLI):
                 normalized_ami_id,
                 cloud_init_b64=cloud_init_b64,
             )
-            rbfe_task = _build_bench_task_id(launch_task_id_rbfe, BenchmarkKind.RBFE)
+            rbfe_task = _build_bench_task_id(
+                launch_task_id_rbfe,
+                BenchmarkKind.RBFE,
+                mps_process_count=mps_process_count,
+            )
             tasks[launch_task_id_rbfe] = rbfe_task
         else:
             task_id = _build_task_id(
@@ -244,7 +262,11 @@ class AwsCLI(ProviderCLI):
                 normalized_ami_id,
                 cloud_init_b64=cloud_init_b64,
             )
-            bench_task_id = _build_bench_task_id(task_id, benchmark_kind)
+            bench_task_id = _build_bench_task_id(
+                task_id,
+                benchmark_kind,
+                mps_process_count=mps_process_count,
+            )
             tasks[task_id] = bench_task_id
 
         for launch_task, bench_task in tasks.items():
