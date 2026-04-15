@@ -135,6 +135,42 @@ def _write_fake_rbfe_script_without_nc_output(benchmark_dir: Path) -> None:
     )
 
 
+def _write_fake_mps_benchmark_script(
+    benchmark_dir: Path,
+    script_name: str,
+    *,
+    mismatch_process_index: int | None = None,
+) -> None:
+    """Write a fake benchmark script with output values keyed by process index."""
+    script = benchmark_dir / script_name
+    mismatch_index_text = (
+        "None" if mismatch_process_index is None else str(mismatch_process_index)
+    )
+    script.write_text(
+        "import click\nimport json\nimport pathlib\n\n"
+        f"MISMATCH_PROCESS_INDEX = {mismatch_index_text}\n\n"
+        "def _process_index(output_file):\n"
+        "    name = pathlib.Path(output_file).name\n"
+        "    if '.process-' not in name:\n"
+        "        return 0\n"
+        "    suffix = name.split('.process-', 1)[1]\n"
+        "    return int(suffix.split('.out', 1)[0])\n\n"
+        "@click.command()\n"
+        "@click.option('--input_file', required=True)\n"
+        "@click.option('--output_file', required=True)\n"
+        "def run_benchmark(input_file, output_file):\n"
+        "    process_index = _process_index(output_file)\n"
+        "    payload = {'system_a': float(process_index + 1)}\n"
+        "    if MISMATCH_PROCESS_INDEX is not None and process_index == MISMATCH_PROCESS_INDEX:\n"
+        "        payload = {'unexpected_system': float(process_index + 1)}\n"
+        "    print(f'child process {process_index}')\n"
+        "    with open(output_file, 'w') as f:\n"
+        "        json.dump(payload, f)\n\n"
+        "if __name__ == '__main__':\n"
+        "    run_benchmark()\n"
+    )
+
+
 # ---------------------------------------------------------------------------
 # run_benchmark() unit tests
 # ---------------------------------------------------------------------------
@@ -273,9 +309,11 @@ def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path)
         expected_manifest_key,
     }
 
+    assert manifest["schema_version"] == 3
     assert manifest["bench_task_id"] == task_id
     assert manifest["s3_prefix"] == expected_prefix
     assert manifest["benchmark_kind"] == "md"
+    assert manifest["mps_process_count"] == 1
     assert manifest["input"]["s3_key"] == input_key
     assert manifest["output"]["s3_key"] == output_key
     assert manifest["output"]["json_parse_ok"] is True
@@ -321,7 +359,9 @@ def test_run_benchmark_executes_rbfe_when_requested(tmp_path):
     )
     manifest = json.loads(uploaded_by_key[manifest_key])
 
+    assert manifest["schema_version"] == 3
     assert manifest["benchmark_kind"] == "rbfe"
+    assert manifest["mps_process_count"] == 1
     assert manifest["execution"]["success"] is True
     assert manifest["output"]["source_name"] == "rbfe_benchmark.out"
     assert manifest["output"]["json_parse_ok"] is True
@@ -403,6 +443,165 @@ def test_run_benchmark_rbfe_compat_handles_outputs_without_nc_key(tmp_path):
     assert output_payload["system_a"] == 34.5
 
     for mod in ("rbfe_benchmark",):
+        sys.modules.pop(mod, None)
+
+
+def test_run_benchmark_aggregates_mps_outputs_for_md(tmp_path):
+    repo = _make_benchmark_repo(tmp_path)
+    benchmark_dir = repo / "benchmark"
+    _write_fake_mps_benchmark_script(benchmark_dir, "md_benchmark.py")
+
+    uploaded_by_key: dict[str, str] = {}
+
+    class _FakeS3Client:
+        def upload_file(self, filename, bucket, key):
+            assert bucket == "bucket"
+            uploaded_by_key[key] = Path(filename).read_text(encoding="utf-8")
+
+    task_id = (
+        "bench:md:mps:3:us-east-1:g5.xlarge:ami-1234:"
+        "123e4567-e89b-12d3-a456-426614174000"
+    )
+
+    with patch(
+        "benchmarking_orchestration.bench.boto3.client",
+        return_value=_FakeS3Client(),
+    ):
+        run_benchmark(
+            repo,
+            s3_bucket="bucket",
+            task_id=task_id,
+            benchmark_kind=BenchmarkKind.MD,
+            mps_process_count=3,
+        )
+
+    manifest_key = next(
+        key for key in uploaded_by_key if key.endswith("/manifest.json")
+    )
+    output_key = next(
+        key for key in uploaded_by_key if key.endswith("/output/md_benchmark.out")
+    )
+    manifest = json.loads(uploaded_by_key[manifest_key])
+    output_payload = json.loads(uploaded_by_key[output_key])
+
+    assert manifest["schema_version"] == 3
+    assert manifest["benchmark_kind"] == "md"
+    assert manifest["mps_process_count"] == 3
+    assert manifest["execution"]["success"] is True
+    assert manifest["output"]["s3_key"] == output_key
+    assert output_payload == {"system_a": 6.0}
+    assert any(
+        "/output/children/md_benchmark.process-0.out" in key for key in uploaded_by_key
+    )
+    assert any(
+        "/output/children/md_benchmark.process-1.out" in key for key in uploaded_by_key
+    )
+    assert any(
+        "/output/children/md_benchmark.process-2.out" in key for key in uploaded_by_key
+    )
+    assert any("/logs/children/stdout.process-0.log" in key for key in uploaded_by_key)
+
+    for mod in ("md_benchmark",):
+        sys.modules.pop(mod, None)
+
+
+def test_run_benchmark_aggregates_mps_outputs_for_rbfe(tmp_path):
+    repo = _make_benchmark_repo(tmp_path)
+    benchmark_dir = repo / "benchmark"
+    _write_fake_mps_benchmark_script(benchmark_dir, "rbfe_benchmark.py")
+
+    uploaded_by_key: dict[str, str] = {}
+
+    class _FakeS3Client:
+        def upload_file(self, filename, bucket, key):
+            assert bucket == "bucket"
+            uploaded_by_key[key] = Path(filename).read_text(encoding="utf-8")
+
+    task_id = (
+        "bench:rbfe:mps:2:us-east-1:g5.xlarge:ami-1234:"
+        "123e4567-e89b-12d3-a456-426614174000"
+    )
+
+    with patch(
+        "benchmarking_orchestration.bench.boto3.client",
+        return_value=_FakeS3Client(),
+    ):
+        run_benchmark(
+            repo,
+            s3_bucket="bucket",
+            task_id=task_id,
+            benchmark_kind=BenchmarkKind.RBFE,
+            mps_process_count=2,
+        )
+
+    output_key = next(
+        key for key in uploaded_by_key if key.endswith("/output/rbfe_benchmark.out")
+    )
+    manifest_key = next(
+        key for key in uploaded_by_key if key.endswith("/manifest.json")
+    )
+    output_payload = json.loads(uploaded_by_key[output_key])
+    manifest = json.loads(uploaded_by_key[manifest_key])
+
+    assert output_payload == {"system_a": 3.0}
+    assert manifest["benchmark_kind"] == "rbfe"
+    assert manifest["mps_process_count"] == 2
+    assert manifest["execution"]["success"] is True
+
+    for mod in ("rbfe_benchmark",):
+        sys.modules.pop(mod, None)
+
+
+def test_run_benchmark_mps_aggregation_fails_when_child_keys_mismatch(tmp_path):
+    repo = _make_benchmark_repo(tmp_path)
+    benchmark_dir = repo / "benchmark"
+    _write_fake_mps_benchmark_script(
+        benchmark_dir,
+        "md_benchmark.py",
+        mismatch_process_index=1,
+    )
+
+    uploaded_by_key: dict[str, str] = {}
+
+    class _FakeS3Client:
+        def upload_file(self, filename, bucket, key):
+            assert bucket == "bucket"
+            uploaded_by_key[key] = Path(filename).read_text(encoding="utf-8")
+
+    task_id = (
+        "bench:md:mps:2:us-east-1:g5.xlarge:ami-1234:"
+        "123e4567-e89b-12d3-a456-426614174000"
+    )
+
+    with patch(
+        "benchmarking_orchestration.bench.boto3.client",
+        return_value=_FakeS3Client(),
+    ):
+        with pytest.raises(RuntimeError, match="invalid"):
+            run_benchmark(
+                repo,
+                s3_bucket="bucket",
+                task_id=task_id,
+                benchmark_kind=BenchmarkKind.MD,
+                mps_process_count=2,
+            )
+
+    manifest_key = next(
+        key for key in uploaded_by_key if key.endswith("/manifest.json")
+    )
+    manifest = json.loads(uploaded_by_key[manifest_key])
+
+    assert manifest["mps_process_count"] == 2
+    assert manifest["execution"]["success"] is False
+    assert manifest["output"]["s3_key"] is None
+    assert any(
+        "/output/children/md_benchmark.process-0.out" in key for key in uploaded_by_key
+    )
+    assert any(
+        "/output/children/md_benchmark.process-1.out" in key for key in uploaded_by_key
+    )
+
+    for mod in ("md_benchmark",):
         sys.modules.pop(mod, None)
 
 

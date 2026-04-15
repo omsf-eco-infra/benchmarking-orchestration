@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -21,7 +22,7 @@ from ..task_id import _parse_bench_task_id
 #: Default benchmark input JSON, relative to the data/ directory of the
 #: performance_benchmarks repo (industry_benchmarks branch).
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
-_RESULT_MANIFEST_SCHEMA_VERSION = 2
+_RESULT_MANIFEST_SCHEMA_VERSION = 3
 
 
 def _build_result_s3_prefix(task_id: str, run_started_at: datetime) -> str:
@@ -327,6 +328,249 @@ def _write_text_file(file_path: Path, content: str) -> None:
     file_path.write_text(content, encoding="utf-8")
 
 
+def _invoke_benchmark_command(
+    run_command: Any,
+    input_file: Path,
+    output_file: Path,
+) -> tuple[str, str, Exception | None, str | None]:
+    """Invoke one benchmark Click command and capture its outputs.
+
+    Parameters
+    ----------
+    run_command : Any
+        Benchmark Click command exposing ``main``.
+    input_file : Path
+        Benchmark input JSON path.
+    output_file : Path
+        Benchmark output JSON path to create.
+
+    Returns
+    -------
+    tuple[str, str, Exception | None, str | None]
+        Captured ``(stdout_text, stderr_text, run_exception,
+        exception_traceback_text)``.
+    """
+    stdout_stream = io.StringIO()
+    stderr_stream = io.StringIO()
+    run_exception: Exception | None = None
+    exception_traceback_text: str | None = None
+
+    try:
+        with (
+            contextlib.redirect_stdout(stdout_stream),
+            contextlib.redirect_stderr(stderr_stream),
+        ):
+            run_command.main(
+                [
+                    "--input_file",
+                    str(input_file),
+                    "--output_file",
+                    str(output_file),
+                ],
+                standalone_mode=False,
+            )
+    except Exception as exc:
+        run_exception = exc
+        exception_traceback_text = traceback.format_exc()
+
+    return (
+        stdout_stream.getvalue(),
+        stderr_stream.getvalue(),
+        run_exception,
+        exception_traceback_text,
+    )
+
+
+def _combine_text_files(destination: Path, source_paths: list[Path]) -> None:
+    """Combine multiple text files into a single destination file.
+
+    Parameters
+    ----------
+    destination : Path
+        Output file path.
+    source_paths : list[Path]
+        Source text files to concatenate in order.
+    """
+    combined_parts: list[str] = []
+    for source_path in source_paths:
+        if not source_path.exists():
+            continue
+        combined_parts.append(f"===== {source_path.name} =====\n")
+        combined_parts.append(source_path.read_text(encoding="utf-8"))
+        if not combined_parts[-1].endswith("\n"):
+            combined_parts.append("\n")
+    _write_text_file(destination, "".join(combined_parts))
+
+
+def _load_numeric_output_payload(
+    input_payload: object,
+    output_file: Path,
+) -> dict[str, float]:
+    """Load one benchmark output JSON and validate numeric payload values.
+
+    Parameters
+    ----------
+    input_payload : object
+        Parsed benchmark input payload used for key validation.
+    output_file : Path
+        Output JSON file to parse.
+
+    Returns
+    -------
+    dict[str, float]
+        Validated numeric payload converted to floats.
+
+    Raises
+    ------
+    RuntimeError
+        If the output file is missing, invalid JSON, mismatched against input,
+        or contains non-numeric values.
+    """
+    if not output_file.exists():
+        raise RuntimeError(f"Benchmark output file was not produced: '{output_file}'.")
+
+    try:
+        output_payload = json.loads(output_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Benchmark output file '{output_file.name}' is not valid JSON: {exc}"
+        ) from exc
+
+    output_validation_ok, output_validation_message = _validate_output_against_input(
+        input_payload,
+        output_payload,
+    )
+    if not output_validation_ok:
+        raise RuntimeError(
+            f"Benchmark output file '{output_file.name}' is invalid: "
+            f"{output_validation_message}"
+        )
+
+    assert isinstance(output_payload, dict)
+    normalized_payload: dict[str, float] = {}
+    for system_name, value in output_payload.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RuntimeError(
+                f"Benchmark output file '{output_file.name}' has a non-numeric "
+                f"value for system '{system_name}'."
+            )
+        normalized_payload[str(system_name)] = float(value)
+
+    return normalized_payload
+
+
+def _aggregate_child_outputs(
+    input_payload: object,
+    child_output_files: list[Path],
+    aggregate_output_file: Path,
+) -> None:
+    """Aggregate validated child benchmark outputs into one canonical JSON file.
+
+    Parameters
+    ----------
+    input_payload : object
+        Parsed benchmark input payload used for validation.
+    child_output_files : list[Path]
+        Per-process output JSON files to sum.
+    aggregate_output_file : Path
+        Destination JSON file for the aggregated output.
+
+    Raises
+    ------
+    RuntimeError
+        If any child output is missing, invalid, or cannot be aggregated.
+    """
+    if not child_output_files:
+        raise RuntimeError("No child benchmark outputs were produced for aggregation.")
+
+    aggregated_payload: dict[str, float] = {}
+    for child_output_file in child_output_files:
+        child_payload = _load_numeric_output_payload(input_payload, child_output_file)
+        if not aggregated_payload:
+            aggregated_payload = dict(child_payload)
+            continue
+        for system_name, value in child_payload.items():
+            aggregated_payload[system_name] += value
+
+    aggregate_output_file.write_text(
+        json.dumps(aggregated_payload, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _run_benchmark_subprocess_entrypoint(
+    benchmark_dir_text: str,
+    benchmark_kind_text: str,
+    input_file_text: str,
+    output_file_text: str,
+    stdout_log_text: str,
+    stderr_log_text: str,
+    exception_log_text: str,
+) -> int:
+    """Execute one benchmark child process and persist its logs to disk.
+
+    Parameters
+    ----------
+    benchmark_dir_text : str
+        Benchmark script directory path.
+    benchmark_kind_text : str
+        Benchmark kind value.
+    input_file_text : str
+        Benchmark input JSON path.
+    output_file_text : str
+        Benchmark output JSON path.
+    stdout_log_text : str
+        Child stdout log path.
+    stderr_log_text : str
+        Child stderr log path.
+    exception_log_text : str
+        Child exception traceback log path.
+
+    Returns
+    -------
+    int
+        Process exit code. ``0`` indicates success.
+    """
+    benchmark_dir = Path(benchmark_dir_text)
+    benchmark_kind = _normalize_benchmark_kind(benchmark_kind_text)
+    input_file = Path(input_file_text)
+    output_file = Path(output_file_text)
+    stdout_log_path = Path(stdout_log_text)
+    stderr_log_path = Path(stderr_log_text)
+    exception_log_path = Path(exception_log_text)
+
+    stdout_text = ""
+    stderr_text = ""
+    run_exception: Exception | None = None
+    exception_traceback_text: str | None = None
+    try:
+        run_command, _output_filename, benchmark_module = _resolve_benchmark_runner(
+            benchmark_dir,
+            benchmark_kind,
+        )
+        if benchmark_kind is BenchmarkKind.RBFE:
+            _patch_rbfe_performance_reader_for_openfe_compat(benchmark_module)
+        stdout_text, stderr_text, run_exception, exception_traceback_text = (
+            _invoke_benchmark_command(run_command, input_file, output_file)
+        )
+        if run_exception is None and not output_file.exists():
+            run_exception = RuntimeError(
+                f"{benchmark_kind.value.upper()} benchmark did not produce output file "
+                f"'{output_file.name}'."
+            )
+            exception_traceback_text = str(run_exception)
+    except Exception as exc:
+        run_exception = exc
+        exception_traceback_text = traceback.format_exc()
+    finally:
+        _write_text_file(stdout_log_path, stdout_text)
+        _write_text_file(stderr_log_path, stderr_text)
+        if exception_traceback_text is not None:
+            _write_text_file(exception_log_path, exception_traceback_text)
+
+    return 0 if run_exception is None else 1
+
+
 def run_benchmark(
     benchmark_repo_path: Path,
     s3_bucket: str,
@@ -423,41 +667,143 @@ def run_benchmark(
         stdout_log_path = tmpdir_path / "stdout.log"
         stderr_log_path = tmpdir_path / "stderr.log"
         exception_traceback_path = tmpdir_path / "exception_traceback.log"
+        child_artifacts_dir = tmpdir_path / "children"
+        child_artifacts_dir.mkdir(exist_ok=True)
 
         run_exception: Exception | None = None
         exception_traceback_text: str | None = None
+        child_artifacts: list[dict[str, Path | int]] = []
 
-        stdout_stream = io.StringIO()
-        stderr_stream = io.StringIO()
-        try:
-            with (
-                contextlib.redirect_stdout(stdout_stream),
-                contextlib.redirect_stderr(stderr_stream),
-            ):
-                run_command.main(
-                    [
-                        "--input_file",
-                        str(input_file),
-                        "--output_file",
-                        str(output_file),
-                    ],
-                    standalone_mode=False,
-                )
-        except Exception as exc:
-            run_exception = exc
-            exception_traceback_text = traceback.format_exc()
-
-        if run_exception is None and not output_file.exists():
-            run_exception = RuntimeError(
-                f"{benchmark_kind.value.upper()} benchmark did not produce output file "
-                f"'{output_file.name}'."
+        if mps_process_count == 1:
+            stdout_text, stderr_text, run_exception, exception_traceback_text = (
+                _invoke_benchmark_command(run_command, input_file, output_file)
             )
-            exception_traceback_text = str(run_exception)
+            if run_exception is None and not output_file.exists():
+                run_exception = RuntimeError(
+                    f"{benchmark_kind.value.upper()} benchmark did not produce output "
+                    f"file '{output_file.name}'."
+                )
+                exception_traceback_text = str(run_exception)
 
-        _write_text_file(stdout_log_path, stdout_stream.getvalue())
-        _write_text_file(stderr_log_path, stderr_stream.getvalue())
-        if exception_traceback_text is not None:
-            _write_text_file(exception_traceback_path, exception_traceback_text)
+            _write_text_file(stdout_log_path, stdout_text)
+            _write_text_file(stderr_log_path, stderr_text)
+            if exception_traceback_text is not None:
+                _write_text_file(exception_traceback_path, exception_traceback_text)
+        else:
+            benchmark_subprocess_code = (
+                "from benchmarking_orchestration.bench import "
+                "_run_benchmark_subprocess_entrypoint; "
+                "import sys; "
+                "raise SystemExit(_run_benchmark_subprocess_entrypoint(*sys.argv[1:]))"
+            )
+            benchmark_output_path = Path(output_filename)
+            child_processes: list[
+                tuple[subprocess.Popen[str], dict[str, Path | int]]
+            ] = []
+            for process_index in range(mps_process_count):
+                child_output_path = child_artifacts_dir / (
+                    f"{benchmark_output_path.stem}.process-{process_index}"
+                    f"{benchmark_output_path.suffix}"
+                )
+                child_stdout_log_path = (
+                    child_artifacts_dir / f"stdout.process-{process_index}.log"
+                )
+                child_stderr_log_path = (
+                    child_artifacts_dir / f"stderr.process-{process_index}.log"
+                )
+                child_exception_log_path = (
+                    child_artifacts_dir
+                    / f"exception_traceback.process-{process_index}.log"
+                )
+                child_record: dict[str, Path | int] = {
+                    "process_index": process_index,
+                    "output_path": child_output_path,
+                    "stdout_log_path": child_stdout_log_path,
+                    "stderr_log_path": child_stderr_log_path,
+                    "exception_log_path": child_exception_log_path,
+                }
+                child_process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        benchmark_subprocess_code,
+                        str(benchmark_dir),
+                        benchmark_kind.value,
+                        str(input_file),
+                        str(child_output_path),
+                        str(child_stdout_log_path),
+                        str(child_stderr_log_path),
+                        str(child_exception_log_path),
+                    ]
+                )
+                child_processes.append((child_process, child_record))
+
+            for child_process, child_record in child_processes:
+                child_record["returncode"] = child_process.wait()
+                child_artifacts.append(child_record)
+
+            _combine_text_files(
+                stdout_log_path,
+                [
+                    child_artifact["stdout_log_path"]
+                    for child_artifact in child_artifacts
+                    if isinstance(child_artifact["stdout_log_path"], Path)
+                ],
+            )
+            _combine_text_files(
+                stderr_log_path,
+                [
+                    child_artifact["stderr_log_path"]
+                    for child_artifact in child_artifacts
+                    if isinstance(child_artifact["stderr_log_path"], Path)
+                ],
+            )
+            child_exception_paths = [
+                child_artifact["exception_log_path"]
+                for child_artifact in child_artifacts
+                if isinstance(child_artifact["exception_log_path"], Path)
+                and child_artifact["exception_log_path"].exists()
+            ]
+            if child_exception_paths:
+                _combine_text_files(exception_traceback_path, child_exception_paths)
+
+            failed_child = next(
+                (
+                    child_artifact
+                    for child_artifact in child_artifacts
+                    if child_artifact.get("returncode") != 0
+                ),
+                None,
+            )
+            if failed_child is not None:
+                process_index = int(failed_child["process_index"])
+                returncode = int(failed_child["returncode"])
+                run_exception = RuntimeError(
+                    f"Benchmark subprocess {process_index} failed with exit code "
+                    f"{returncode}."
+                )
+                if not exception_traceback_path.exists():
+                    exception_traceback_text = str(run_exception)
+                    _write_text_file(exception_traceback_path, exception_traceback_text)
+            else:
+                try:
+                    _aggregate_child_outputs(
+                        input_payload,
+                        [
+                            child_artifact["output_path"]
+                            for child_artifact in child_artifacts
+                            if isinstance(child_artifact["output_path"], Path)
+                        ],
+                        output_file,
+                    )
+                except Exception as exc:
+                    run_exception = exc
+                    exception_traceback_text = traceback.format_exc()
+                    if not exception_traceback_path.exists():
+                        _write_text_file(
+                            exception_traceback_path,
+                            exception_traceback_text,
+                        )
 
         output_json_parse_ok = False
         output_validation_ok = False
@@ -495,6 +841,7 @@ def run_benchmark(
         manifest = {
             "schema_version": _RESULT_MANIFEST_SCHEMA_VERSION,
             "benchmark_kind": benchmark_kind.value,
+            "mps_process_count": mps_process_count,
             "bench_task_id": task_id,
             "launch_task_id": launch_task_id,
             "s3_bucket": s3_bucket,
@@ -537,6 +884,44 @@ def run_benchmark(
             s3_client.upload_file(str(stderr_log_path), s3_bucket, stderr_s3_key)
             if output_s3_key is not None:
                 s3_client.upload_file(str(output_file), s3_bucket, output_s3_key)
+            for child_artifact in child_artifacts:
+                child_output_path = child_artifact["output_path"]
+                if isinstance(child_output_path, Path) and child_output_path.exists():
+                    s3_client.upload_file(
+                        str(child_output_path),
+                        s3_bucket,
+                        f"{s3_prefix}/output/children/{child_output_path.name}",
+                    )
+                child_stdout_log_path = child_artifact["stdout_log_path"]
+                if (
+                    isinstance(child_stdout_log_path, Path)
+                    and child_stdout_log_path.exists()
+                ):
+                    s3_client.upload_file(
+                        str(child_stdout_log_path),
+                        s3_bucket,
+                        f"{s3_prefix}/logs/children/{child_stdout_log_path.name}",
+                    )
+                child_stderr_log_path = child_artifact["stderr_log_path"]
+                if (
+                    isinstance(child_stderr_log_path, Path)
+                    and child_stderr_log_path.exists()
+                ):
+                    s3_client.upload_file(
+                        str(child_stderr_log_path),
+                        s3_bucket,
+                        f"{s3_prefix}/logs/children/{child_stderr_log_path.name}",
+                    )
+                child_exception_log_path = child_artifact["exception_log_path"]
+                if (
+                    isinstance(child_exception_log_path, Path)
+                    and child_exception_log_path.exists()
+                ):
+                    s3_client.upload_file(
+                        str(child_exception_log_path),
+                        s3_bucket,
+                        f"{s3_prefix}/logs/children/{child_exception_log_path.name}",
+                    )
             if exception_traceback_s3_key is not None:
                 s3_client.upload_file(
                     str(exception_traceback_path),

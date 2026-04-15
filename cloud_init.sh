@@ -38,5 +38,9 @@ export TURSO_DATABASE_URL="${TURSO_DATABASE_URL}"
 export TURSO_AUTH_TOKEN="${TURSO_AUTH_TOKEN}"
 export S3_BUCKET="${S3_BUCKET}"
 
+if command -v nvidia-cuda-mps-control >/dev/null 2>&1; then
+  nvidia-cuda-mps-control -d
+fi
+
 pixi run --manifest-path "\$CLI_PATH/pyproject.toml" -e bench python -m benchmarking_orchestration worker aws --capability "${GPU_CAPABILITY}" --bench-repo-path "\$BENCH_REPO_PATH"
 EOF

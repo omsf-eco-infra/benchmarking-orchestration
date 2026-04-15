@@ -53,6 +53,12 @@ class _FakeConfig:
         self.task_db = task_db
 
 
+def test_cloud_init_starts_cuda_mps_daemon():
+    cloud_init_text = Path("cloud_init.sh").read_text(encoding="utf-8")
+
+    assert "nvidia-cuda-mps-control -d" in cloud_init_text
+
+
 def test_register_cli_registers_aws_subcommands():
     class _FakeApp:
         def __init__(self):
