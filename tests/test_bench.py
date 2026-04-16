@@ -309,10 +309,17 @@ def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path)
         expected_manifest_key,
     }
 
-    assert manifest["schema_version"] == 3
-    assert manifest["bench_task_id"] == task_id
+    assert manifest["schema_version"] == 4
+    assert "bench_task_id" not in manifest
+    assert "launch_task_id" not in manifest
     assert manifest["s3_prefix"] == expected_prefix
     assert manifest["benchmark_kind"] == "md"
+    assert manifest["launch"] == {
+        "region": "us-east-1",
+        "instance_type": "g5.xlarge",
+        "ami_id": "ami-1234",
+        "cloud_init_provided": True,
+    }
     assert manifest["mps_process_count"] == 1
     assert manifest["input"]["s3_key"] == input_key
     assert manifest["output"]["s3_key"] == output_key
@@ -359,7 +366,7 @@ def test_run_benchmark_executes_rbfe_when_requested(tmp_path):
     )
     manifest = json.loads(uploaded_by_key[manifest_key])
 
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["benchmark_kind"] == "rbfe"
     assert manifest["mps_process_count"] == 1
     assert manifest["execution"]["success"] is True
@@ -484,7 +491,7 @@ def test_run_benchmark_aggregates_mps_outputs_for_md(tmp_path):
     manifest = json.loads(uploaded_by_key[manifest_key])
     output_payload = json.loads(uploaded_by_key[output_key])
 
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
     assert manifest["benchmark_kind"] == "md"
     assert manifest["mps_process_count"] == 3
     assert manifest["execution"]["success"] is True

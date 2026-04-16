@@ -1,4 +1,5 @@
 from __future__ import annotations
+from benchmarking_orchestration.aws.info import MetadataService
 
 import contextlib
 import hashlib
@@ -11,18 +12,18 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import boto3
 
 from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
-from ..task_id import _parse_bench_task_metadata
+from ..task_id import _parse_bench_task_metadata, _parse_launch_task_id
 
 
 #: Default benchmark input JSON, relative to the data/ directory of the
 #: performance_benchmarks repo (industry_benchmarks branch).
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
-_RESULT_MANIFEST_SCHEMA_VERSION = 3
+_RESULT_MANIFEST_SCHEMA_VERSION = 4
 
 
 def _build_result_s3_prefix(task_id: str, run_started_at: datetime) -> str:
@@ -155,6 +156,8 @@ def _resolve_benchmark_runner(
 
     sys.path.insert(0, str(benchmark_dir))
     try:
+        importlib.invalidate_caches()
+        sys.modules.pop(module_name, None)
         benchmark_module = importlib.import_module(module_name)
     except Exception as exc:
         raise RuntimeError(
@@ -619,6 +622,9 @@ def run_benchmark(
         task_benchmark_kind, task_mps_process_count, launch_task_id = (
             _parse_bench_task_metadata(task_id)
         )
+        launch_region, launch_instance_type, launch_ami_id, launch_cloud_init_b64 = (
+            _parse_launch_task_id(launch_task_id)
+        )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     if task_benchmark_kind != benchmark_kind:
@@ -842,10 +848,14 @@ def run_benchmark(
             "schema_version": _RESULT_MANIFEST_SCHEMA_VERSION,
             "benchmark_kind": benchmark_kind.value,
             "mps_process_count": mps_process_count,
-            "bench_task_id": task_id,
-            "launch_task_id": launch_task_id,
             "s3_bucket": s3_bucket,
             "s3_prefix": s3_prefix,
+            "launch": {
+                "region": launch_region,
+                "instance_type": launch_instance_type,
+                "ami_id": launch_ami_id,
+                "cloud_init_provided": launch_cloud_init_b64 is not None,
+            },
             "input": {
                 "source_name": input_file.name,
                 "s3_key": input_s3_key,
@@ -874,6 +884,16 @@ def run_benchmark(
                 "completed_at_utc": _isoformat_utc(completed_at),
             },
         }
+        try:
+            metadata = MetadataService()
+            instance_id = metadata.instance_id()
+            if instance_id:
+                manifest["instance_id"] = instance_id
+            instance_type = metadata.instance_type()
+            if instance_type:
+                manifest["instance_type"] = instance_type
+        except:
+            pass
 
         manifest_path = tmpdir_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
