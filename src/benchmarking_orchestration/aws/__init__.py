@@ -4,6 +4,7 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError, WaiterError
 
 DEFAULT_LAUNCH_AMI_ID = "ami-0ec16471888b25545"
+DEFAULT_LAUNCH_AMI_ENV_VAR = "AWS_BENCHMARK_AMI_ID"
 
 
 def _is_ondemand_g_quota_name(name: str) -> bool:
@@ -195,20 +196,25 @@ def validate_launch_instance_type(
         )
 
 
-def validate_launch_ami(
+def get_launch_ami_details(
     ami_id: str, region: str = "us-east-1", ec2_client: Any = None
-) -> None:
-    """Validate that a launch AMI exists and is available in AWS.
+) -> dict[str, Any]:
+    """Return validated AMI metadata for a launch image.
 
     Parameters
     ----------
     ami_id : str
-        EC2 AMI identifier to validate.
+        EC2 AMI identifier to inspect.
     region : str, default="us-east-1"
-        AWS region where AMI availability should be checked.
+        AWS region where the AMI should exist.
     ec2_client : Any, optional
         Boto3 EC2 client (or compatible test double). When ``None``,
         a client is created from ``boto3``.
+
+    Returns
+    -------
+    dict[str, Any]
+        AWS ``describe_images`` metadata for the AMI.
 
     Raises
     ------
@@ -254,6 +260,59 @@ def validate_launch_ami(
         raise RuntimeError(
             f"AMI '{normalized_ami_id}' is unavailable in region '{normalized_region}'."
         )
+
+    return first_image
+
+
+def get_launch_ami_name(
+    ami_id: str, region: str = "us-east-1", ec2_client: Any = None
+) -> str:
+    """Return a human-readable AMI name for launch confirmation.
+
+    Parameters
+    ----------
+    ami_id : str
+        EC2 AMI identifier to inspect.
+    region : str, default="us-east-1"
+        AWS region where the AMI should exist.
+    ec2_client : Any, optional
+        Boto3 EC2 client (or compatible test double). When ``None``,
+        a client is created from ``boto3``.
+
+    Returns
+    -------
+    str
+        AMI ``Name`` when available, otherwise a descriptive fallback.
+    """
+    image = get_launch_ami_details(ami_id, region=region, ec2_client=ec2_client)
+    image_name = image.get("Name") or image.get("Description") or image.get("ImageId")
+    return str(image_name)
+
+
+def validate_launch_ami(
+    ami_id: str, region: str = "us-east-1", ec2_client: Any = None
+) -> None:
+    """Validate that a launch AMI exists and is available in AWS.
+
+    Parameters
+    ----------
+    ami_id : str
+        EC2 AMI identifier to validate.
+    region : str, default="us-east-1"
+        AWS region where AMI availability should be checked.
+    ec2_client : Any, optional
+        Boto3 EC2 client (or compatible test double). When ``None``,
+        a client is created from ``boto3``.
+
+    Raises
+    ------
+    ValueError
+        If the AMI identifier is empty.
+    RuntimeError
+        If AWS validation fails, the AMI is missing in region, or the
+        AMI state is not ``available``.
+    """
+    get_launch_ami_details(ami_id, region=region, ec2_client=ec2_client)
 
 
 def launch_ec2_instance(

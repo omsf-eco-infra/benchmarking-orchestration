@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Callable, Optional
 
 from cyclopts import App, Parameter, validators
 
-from ..aws import validate_launch_ami, validate_launch_instance_type
+from ..aws import (
+    DEFAULT_LAUNCH_AMI_ENV_VAR,
+    get_launch_ami_name,
+    validate_launch_ami,
+    validate_launch_instance_type,
+)
 from ..bench import run_benchmark
 from ..benchmark_kind import BenchmarkKind
 from ..capabilities import WorkerCapability, _resolve_bench_worker_capability
@@ -23,8 +29,138 @@ from ..task_id import (
     _parse_launch_task_id,
 )
 from . import LaunchSpec, get_provider
-from .aws_provider import DEFAULT_LAUNCH_AMI_ID
 from .cli_protocol import Config, ProviderCLI
+
+
+def _normalize_optional_ami_id(ami_id: str | None) -> str | None:
+    """Normalize an optional AMI identifier.
+
+    Parameters
+    ----------
+    ami_id : str | None
+        Raw AMI identifier provided by the caller.
+
+    Returns
+    -------
+    str | None
+        Lowercased, normalized AMI identifier when provided, otherwise ``None``.
+    """
+    if ami_id is None:
+        return None
+    return _normalize_ami_id(ami_id)
+
+
+def _resolve_required_ami_id(ami_id: str | None) -> str:
+    """Resolve the required AMI identifier for AWS queueing.
+
+    Parameters
+    ----------
+    ami_id : str | None
+        Explicit AMI identifier argument, or ``None`` to fall back to the
+        approved environment variable.
+
+    Returns
+    -------
+    str
+        Normalized AMI identifier.
+
+    Raises
+    ------
+    ValueError
+        If no AMI identifier is provided explicitly or via the approved
+        environment variable.
+    """
+    normalized_ami_id = _normalize_optional_ami_id(ami_id)
+    if normalized_ami_id is not None:
+        return normalized_ami_id
+
+    configured_ami_id = _normalize_optional_ami_id(
+        os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
+    )
+    if configured_ami_id is not None:
+        return configured_ami_id
+
+    raise ValueError(
+        f"AMI ID is required. Pass --ami-id or set {DEFAULT_LAUNCH_AMI_ENV_VAR}."
+    )
+
+
+def _confirm_ami_choice(
+    ami_id: str,
+    ami_name: str,
+    region: str,
+    *,
+    yes: bool = False,
+    input_func: Callable[[str], str] = input,
+) -> None:
+    """Confirm the AMI selection before queueing new AWS tasks.
+
+    Parameters
+    ----------
+    ami_id : str
+        Normalized AMI identifier selected for queueing.
+    ami_name : str
+        Human-readable AMI name returned by AWS.
+    region : str
+        AWS region where the AMI will be used.
+    yes : bool, default=False
+        When ``True``, skip the interactive confirmation prompt.
+    input_func : Callable[[str], str], default=input
+        Input function used to prompt for confirmation.
+
+    Raises
+    ------
+    ValueError
+        If the AMI selection is not confirmed.
+    """
+    print(
+        f"Resolved AMI for AWS queueing: '{ami_name}' ({ami_id}) in region '{region}'."
+    )
+
+    if yes:
+        print("AMI confirmation skipped because --yes was provided.")
+        return
+
+    prompt = f"Queue tasks with AMI '{ami_name}' ({ami_id})? [y/N]: "
+    if not sys.stdin.isatty():
+        raise ValueError(
+            "Refusing to queue AWS tasks without interactive AMI confirmation. "
+            f"Re-run with --yes after verifying AMI '{ami_name}' ({ami_id})."
+        )
+
+    response = input_func(prompt).strip().lower()
+    if response not in {"y", "yes"}:
+        raise ValueError(
+            f"Aborted AWS task creation because AMI '{ami_name}' ({ami_id}) was not confirmed."
+        )
+
+
+def _validate_launch_task_ami_against_expected(task_ami_id: str) -> None:
+    """Validate a queued launch task AMI against the approved AMI setting.
+
+    Parameters
+    ----------
+    task_ami_id : str
+        AMI identifier embedded in the queued launch task.
+
+    Raises
+    ------
+    RuntimeError
+        If an approved AMI is configured and the queued task AMI does not match it.
+    """
+    configured_ami_id = _normalize_optional_ami_id(
+        os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
+    )
+    if configured_ami_id is None:
+        return
+
+    normalized_task_ami_id = _normalize_ami_id(task_ami_id)
+    if normalized_task_ami_id != configured_ami_id:
+        raise RuntimeError(
+            "Queued launch task AMI does not match the approved AMI. "
+            f"Task AMI: '{normalized_task_ami_id}'. Approved AMI from "
+            f"{DEFAULT_LAUNCH_AMI_ENV_VAR}: '{configured_ami_id}'."
+        )
 
 
 class AwsCLI(ProviderCLI):
@@ -153,7 +289,13 @@ class AwsCLI(ProviderCLI):
         self,
         instance_type: str,
         region: str = "us-east-1",
-        ami_id: str = DEFAULT_LAUNCH_AMI_ID,
+        ami_id: Annotated[
+            Optional[str],
+            Parameter(
+                env_var=DEFAULT_LAUNCH_AMI_ENV_VAR,
+                show_env_var=True,
+            ),
+        ] = None,
         cloud_init_file: Annotated[
             Optional[Path],
             Parameter(
@@ -178,6 +320,7 @@ class AwsCLI(ProviderCLI):
                 ),
             ),
         ] = Path("/opt/dlami/nvme/performance_benchmarks"),
+        yes: bool = False,
         *,
         config: Config | None = None,
     ) -> None:
@@ -189,8 +332,10 @@ class AwsCLI(ProviderCLI):
             Requested EC2 instance type to validate and schedule.
         region : str
             AWS region used for instance-type validation and task identity.
-        ami_id : str
-            AMI identifier recorded with task launch metadata.
+        ami_id : str, optional
+            AMI identifier recorded with task launch metadata. When omitted,
+            the CLI falls back to the approved ``AWS_BENCHMARK_AMI_ID``
+            environment variable.
         cloud_init_file : str, optional
             Cloud-init file path to encode and store with task launch metadata.
         db_path : str | None
@@ -205,6 +350,9 @@ class AwsCLI(ProviderCLI):
             Falls back to the ``BENCHMARK_S3_BUCKET`` environment variable.
         bench_repo_path : Path, optional
             Path to the benchmark repository. Preserved for CLI compatibility.
+        yes : bool, default=False
+            Skip the interactive AMI confirmation prompt after the resolved AMI
+            name has been displayed.
         """
         if config is None:
             config = Config()
@@ -212,13 +360,20 @@ class AwsCLI(ProviderCLI):
 
         normalized_instance_type = _normalize_instance_type(instance_type)
         normalized_region = _normalize_region(region)
-        normalized_ami_id = _normalize_ami_id(ami_id)
+        normalized_ami_id = _resolve_required_ami_id(ami_id)
 
         if mps_process_count < 1:
             raise ValueError("mps_process_count must be greater than or equal to 1.")
 
         validate_launch_instance_type(normalized_instance_type, normalized_region)
         validate_launch_ami(normalized_ami_id, normalized_region)
+        ami_name = get_launch_ami_name(normalized_ami_id, normalized_region)
+        _confirm_ami_choice(
+            normalized_ami_id,
+            ami_name,
+            normalized_region,
+            yes=yes,
+        )
 
         instance_capability = _resolve_bench_worker_capability(normalized_instance_type)
         extra_vars: dict[str, str] = {"GPU_CAPABILITY": instance_capability.value}
@@ -313,6 +468,7 @@ class AwsCLI(ProviderCLI):
             task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
                 _parse_launch_task_id(task)
             )
+            _validate_launch_task_ami_against_expected(task_ami_id)
             cloud_init_user_data = None
             if cloud_init_b64 is not None:
                 cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)

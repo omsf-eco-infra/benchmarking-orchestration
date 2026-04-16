@@ -247,6 +247,11 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         aws_cli_module,
+        "get_launch_ami_name",
+        lambda ami_id, region: f"approved-{ami_id}-{region}",
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
         "_resolve_bench_worker_capability",
         lambda _instance_type: WorkerCapability.G5,
     )
@@ -290,6 +295,7 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
         cloud_init_file=Path("cloud-init.sh"),
         benchmark_kind=BenchmarkKind.MD,
         s3_bucket="bench-results",
+        yes=True,
         config=config,
     )
 
@@ -337,6 +343,8 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
             "capability": "g5",
         },
     ]
+    assert "Resolved AMI for AWS queueing" in out
+    assert "AMI confirmation skipped because --yes was provided." in out
     assert "Created benchmark task" in out
 
 
@@ -354,6 +362,11 @@ def test_create_benchmark_task_uses_requested_mps_process_count(monkeypatch):
         aws_cli_module,
         "validate_launch_ami",
         lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "get_launch_ami_name",
+        lambda ami_id, region: f"approved-{ami_id}-{region}",
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -385,8 +398,10 @@ def test_create_benchmark_task_uses_requested_mps_process_count(monkeypatch):
 
     AwsCLI().create(
         instance_type="g5.xlarge",
+        ami_id="ami-0abc123456789def0",
         benchmark_kind=BenchmarkKind.RBFE,
         mps_process_count=3,
+        yes=True,
         config=config,
     )
 
@@ -414,6 +429,11 @@ def test_create_both_tasks_use_requested_mps_process_count(monkeypatch):
         aws_cli_module,
         "validate_launch_ami",
         lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "get_launch_ami_name",
+        lambda ami_id, region: f"approved-{ami_id}-{region}",
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -447,8 +467,10 @@ def test_create_both_tasks_use_requested_mps_process_count(monkeypatch):
 
     AwsCLI().create(
         instance_type="g5.xlarge",
+        ami_id="ami-0abc123456789def0",
         benchmark_kind=BenchmarkKind.BOTH,
         mps_process_count=4,
+        yes=True,
         config=config,
     )
 
@@ -464,3 +486,89 @@ def test_create_both_tasks_use_requested_mps_process_count(monkeypatch):
             "mps_process_count": 4,
         },
     ]
+
+
+def test_create_requires_explicit_or_configured_ami_id(monkeypatch):
+    fake_db = _FakeTaskDB()
+    config = _FakeConfig(fake_db)
+
+    monkeypatch.delenv("AWS_BENCHMARK_AMI_ID", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="AMI ID is required. Pass --ami-id or set AWS_BENCHMARK_AMI_ID.",
+    ):
+        AwsCLI().create(
+            instance_type="g5.xlarge",
+            yes=True,
+            config=config,
+        )
+
+
+def test_create_uses_approved_ami_from_environment(monkeypatch):
+    fake_db = _FakeTaskDB()
+    config = _FakeConfig(fake_db)
+    ami_validation_calls: list[dict[str, str]] = []
+
+    monkeypatch.setenv("AWS_BENCHMARK_AMI_ID", "AMI-0ABC123456789DEF0")
+    monkeypatch.setattr(
+        aws_cli_module,
+        "validate_launch_instance_type",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "validate_launch_ami",
+        lambda ami_id, region: ami_validation_calls.append(
+            {"ami_id": ami_id, "region": region}
+        ),
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "get_launch_ami_name",
+        lambda ami_id, region: f"approved-{ami_id}-{region}",
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_resolve_bench_worker_capability",
+        lambda _instance_type: WorkerCapability.G5,
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_read_cloud_init_file_as_base64",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        aws_cli_module, "_build_task_id", lambda *_args, **_kwargs: "launch-task"
+    )
+    monkeypatch.setattr(
+        aws_cli_module,
+        "_build_bench_task_id",
+        lambda *_args, **_kwargs: "bench-task",
+    )
+
+    AwsCLI().create(
+        instance_type="g5.xlarge",
+        yes=True,
+        config=config,
+    )
+
+    assert ami_validation_calls == [
+        {"ami_id": "ami-0abc123456789def0", "region": "us-east-1"}
+    ]
+
+
+def test_launch_rejects_task_with_unapproved_ami(monkeypatch):
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
+        "12345678-1234-5678-1234-567812345678"
+    )
+    fake_db = _FakeTaskDB(checkout_results=[taskid, taskid])
+    config = _FakeConfig(fake_db)
+
+    monkeypatch.setenv("AWS_BENCHMARK_AMI_ID", "ami-0123456789abcdef0")
+
+    with pytest.raises(RuntimeError, match="Queued launch task AMI does not match"):
+        AwsCLI().launch(config=config)
+
+    assert fake_db.mark_calls == [{"taskid": taskid, "success": False}]
