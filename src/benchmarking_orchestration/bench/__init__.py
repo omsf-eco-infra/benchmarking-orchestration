@@ -893,6 +893,7 @@ def run_benchmark(
             if instance_type:
                 manifest["instance_type"] = instance_type
         except:
+            print("MetadatService doesn't exist")
             pass
 
         manifest_path = tmpdir_path / "manifest.json"
