@@ -38,3 +38,7 @@ class MetadataService:
     @cache
     def instance_id(self) -> str:
         return self._get("instance-id")
+
+    @cache
+    def ami_id(self) -> str:
+        return self._get("ami-id")

@@ -850,12 +850,6 @@ def run_benchmark(
             "mps_process_count": mps_process_count,
             "s3_bucket": s3_bucket,
             "s3_prefix": s3_prefix,
-            "launch": {
-                "region": launch_region,
-                "instance_type": launch_instance_type,
-                "ami_id": launch_ami_id,
-                "cloud_init_provided": launch_cloud_init_b64 is not None,
-            },
             "input": {
                 "source_name": input_file.name,
                 "s3_key": input_s3_key,
@@ -892,6 +886,10 @@ def run_benchmark(
             instance_type = metadata.instance_type()
             if instance_type:
                 manifest["instance_type"] = instance_type
+            ami_id = metadata.ami_id()
+            if ami_id:
+                manifest["ami_id"] = ami_id
+            manifest["compute_provider"] = "aws"
         except:
             print("MetadatService doesn't exist")
             pass
