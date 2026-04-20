@@ -134,6 +134,68 @@ def _resolve_vcpus_by_instance_type(
     return vcpus_by_type
 
 
+def get_instance_type_vcpu_count(
+    instance_type: str, region: str = "us-east-1", ec2_client: Any = None
+) -> int:
+    """Return the default vCPU count for an EC2 instance type.
+
+    Parameters
+    ----------
+    instance_type : str
+        EC2 instance type identifier.
+    region : str, default="us-east-1"
+        AWS region used to resolve instance type metadata.
+    ec2_client : Any, optional
+        Boto3 EC2 client (or compatible test double). When ``None``,
+        a client is created from ``boto3``.
+
+    Returns
+    -------
+    int
+        Default vCPU count for the instance type.
+
+    Raises
+    ------
+    ValueError
+        If the instance type or region is empty.
+    RuntimeError
+        If AWS metadata cannot be resolved for the instance type.
+    """
+    normalized_instance_type = instance_type.strip().lower()
+    if not normalized_instance_type:
+        raise ValueError("instance type cannot be empty.")
+
+    normalized_region = region.strip()
+    if not normalized_region:
+        raise ValueError("region cannot be empty.")
+
+    ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    try:
+        vcpus_by_type = _resolve_vcpus_by_instance_type(ec2, [normalized_instance_type])
+    except ClientError as exc:
+        error = exc.response.get("Error", {})
+        code = error.get("Code", "")
+        message = error.get("Message", str(exc))
+        raise RuntimeError(
+            f"AWS error while resolving vCPU count for instance type '{normalized_instance_type}' "
+            f"in region '{normalized_region}': {code or message}"
+        ) from exc
+    except BotoCoreError as exc:
+        raise RuntimeError(
+            f"AWS error while resolving vCPU count for instance type '{normalized_instance_type}' "
+            f"in region '{normalized_region}': {exc}"
+        ) from exc
+
+    vcpu_count = vcpus_by_type.get(normalized_instance_type)
+    if vcpu_count is None:
+        raise RuntimeError(
+            f"Unable to resolve vCPU count for instance type '{normalized_instance_type}' "
+            f"in region '{normalized_region}'."
+        )
+
+    return vcpu_count
+
+
 def validate_launch_instance_type(
     instance_type: str, region: str = "us-east-1", ec2_client: Any = None
 ) -> None:
@@ -498,7 +560,12 @@ def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None)
 
     paginator = ec2.get_paginator("describe_instances")
     pages = paginator.paginate(
-        Filters=[{"Name": "instance-state-name", "Values": ["running"]}]
+        Filters=[
+            {
+                "Name": "instance-state-name",
+                "Values": ["running", "stopping", "pending", "stopped"],
+            }
+        ]
     )
     instance_types = _extract_running_ondemand_g_instance_types(pages)
 

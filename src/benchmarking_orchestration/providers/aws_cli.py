@@ -1,9 +1,12 @@
 from __future__ import annotations
+import time
+from exorcist.taskdb import _logger
+from benchmarking_orchestration.tasks import TaskStatusDB
 
 import os
 import sys
 from pathlib import Path
-from typing import Annotated, Callable, Optional
+from typing import Any, Annotated, Callable, Optional
 
 from cyclopts import App, Parameter, validators
 
@@ -12,6 +15,9 @@ from ..aws import (
     get_launch_ami_name,
     validate_launch_ami,
     validate_launch_instance_type,
+    get_ondemand_g_vcpu_quota,
+    get_ondemand_g_vcpus_used,
+    get_instance_type_vcpu_count,
 )
 from ..bench import run_benchmark
 from ..benchmark_kind import BenchmarkKind
@@ -30,6 +36,8 @@ from ..task_id import (
 )
 from . import LaunchSpec, get_provider
 from .cli_protocol import Config, ProviderCLI
+
+CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
 
 
 def _normalize_optional_ami_id(ami_id: str | None) -> str | None:
@@ -161,6 +169,102 @@ def _validate_launch_task_ami_against_expected(task_ami_id: str) -> None:
             f"Task AMI: '{normalized_task_ami_id}'. Approved AMI from "
             f"{DEFAULT_LAUNCH_AMI_ENV_VAR}: '{configured_ami_id}'."
         )
+
+
+def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
+    """Wait until On-Demand G/VT quota can accommodate an instance launch.
+
+    Parameters
+    ----------
+    task : str
+        Launch task identifier currently being processed.
+    instance_type : str
+        EC2 instance type requested by the launch task.
+    """
+    needed_vcpus = get_instance_type_vcpu_count(instance_type)
+    quota = get_ondemand_g_vcpu_quota()
+    used = get_ondemand_g_vcpus_used()
+    available = quota - used
+    if needed_vcpus <= available:
+        return
+
+    _logger.warning(
+        f"Insufficient vCPU quota to launch '{task}': "
+        f"needed={needed_vcpus}, available={available} "
+        f"(quota={quota}, used={used}). Waiting for capacity..."
+    )
+    while needed_vcpus > available:
+        time.sleep(CAPACITY_RETRY_SLEEP_SECONDS)
+        quota = get_ondemand_g_vcpu_quota()
+        used = get_ondemand_g_vcpus_used()
+        available = quota - used
+
+
+def _is_insufficient_instance_capacity_error(exc: BaseException) -> bool:
+    """Return whether an exception represents EC2 placement capacity exhaustion.
+
+    Parameters
+    ----------
+    exc : BaseException
+        Exception raised during EC2 launch submission.
+
+    Returns
+    -------
+    bool
+        ``True`` when the error indicates ``InsufficientInstanceCapacity``,
+        otherwise ``False``.
+    """
+    if "InsufficientInstanceCapacity" in str(exc):
+        return True
+
+    cause = getattr(exc, "__cause__", None)
+    response = getattr(cause, "response", {}) if cause is not None else {}
+    error = response.get("Error", {}) if isinstance(response, dict) else {}
+    return error.get("Code") == "InsufficientInstanceCapacity"
+
+
+def _submit_loop_launch_spec(
+    task: str,
+    instance_type: str,
+    provider: Any,
+    launch_spec: LaunchSpec,
+) -> str:
+    """Submit a looped AWS launch task with quota waits and capacity retries.
+
+    Parameters
+    ----------
+    task : str
+        Launch task identifier currently being processed.
+    instance_type : str
+        EC2 instance type requested by the launch task.
+    provider : Any
+        Provider implementation used to submit the launch request.
+    launch_spec : LaunchSpec
+        Launch specification sent to the provider.
+
+    Returns
+    -------
+    str
+        Launched EC2 instance identifier.
+
+    Raises
+    ------
+    Exception
+        Re-raises any non-capacity submission error from the provider.
+    """
+    while True:
+        _wait_for_ondemand_g_vcpu_quota(task, instance_type)
+        try:
+            return provider.submit(launch_spec)
+        except Exception as exc:
+            if not _is_insufficient_instance_capacity_error(exc):
+                raise
+            _logger.warning(
+                f"Insufficient EC2 instance capacity while launching '{task}'. "
+                f"Retrying in {CAPACITY_RETRY_SLEEP_SECONDS} seconds. "
+                f"Original error: {exc}"
+            )
+            time.sleep(CAPACITY_RETRY_SLEEP_SECONDS)
 
 
 class AwsCLI(ProviderCLI):
@@ -441,12 +545,61 @@ class AwsCLI(ProviderCLI):
                 f"Created benchmark task for instance type '{normalized_instance_type}' with AMI '{normalized_ami_id}' in region '{normalized_region}'."
             )
 
-    def launch(self, *, config: Config | None = None):
+    def _loop_launch(self, task_db: TaskStatusDB):
+        while True:
+            try:
+                task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Unable to check out task from database '{task_db}': {exc}"
+                ) from exc
+            if task is None:
+                break
+            try:
+                task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
+                    _parse_launch_task_id(task)
+                )
+                _validate_launch_task_ami_against_expected(task_ami_id)
+                cloud_init_user_data = None
+                if cloud_init_b64 is not None:
+                    cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
+                ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
+                instance_profile_name = (
+                    os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
+                )
+                provider = get_provider(self.provider_name)
+                launch_spec = LaunchSpec(
+                    instance_type=task_instance_type,
+                    region=task_region,
+                    ami_id=task_ami_id,
+                    user_data=cloud_init_user_data,
+                    key_name=ec2_key_name,
+                    instance_profile_name=instance_profile_name,
+                )
+                instance_id = _submit_loop_launch_spec(
+                    task=task,
+                    instance_type=task_instance_type,
+                    provider=provider,
+                    launch_spec=launch_spec,
+                )
+            except Exception as exc:
+                task_db.mark_task_completed(task, success=False)
+                raise exc
+            try:
+                task_db.mark_task_completed(task, success=True)
+            except Exception as exc:
+                raise exc
+
+            print(f"Processed launch task '{task}' with instance '{instance_id}'.")
+
+    def launch(self, loop: bool, *, config: Config | None = None):
         """
         Launch an EC2 instance based on a task from the task status database.
 
         Parameters
         ----------
+        loop: bool
+            Whether or not to keep looping until the DB is completed
         config : Config | None, optional
             Configuration object containing the task status database path. If None, a default
             Config object is used.
@@ -455,43 +608,48 @@ class AwsCLI(ProviderCLI):
             config = Config()
         task_db = config.task_db
 
-        try:
-            task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Unable to check out task from database '{task_db}': {exc}"
-            ) from exc
-        if task is None:
-            print("No available launch tasks")
-            return
-        try:
-            task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
-                _parse_launch_task_id(task)
-            )
-            _validate_launch_task_ami_against_expected(task_ami_id)
-            cloud_init_user_data = None
-            if cloud_init_b64 is not None:
-                cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
-            ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
-            instance_profile_name = os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
-            provider = get_provider(self.provider_name)
-            instance_id = provider.submit(
-                LaunchSpec(
-                    instance_type=task_instance_type,
-                    region=task_region,
-                    ami_id=task_ami_id,
-                    user_data=cloud_init_user_data,
-                    key_name=ec2_key_name,
-                    instance_profile_name=instance_profile_name,
+        if loop:
+            self._loop_launch(task_db)
+        else:
+            try:
+                task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Unable to check out task from database '{task_db}': {exc}"
+                ) from exc
+            if task is None:
+                print("No available launch tasks")
+                return
+            try:
+                task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
+                    _parse_launch_task_id(task)
                 )
-            )
-        except Exception as exc:
-            task_db.mark_task_completed(task, success=False)
-            raise exc
+                _validate_launch_task_ami_against_expected(task_ami_id)
+                cloud_init_user_data = None
+                if cloud_init_b64 is not None:
+                    cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
+                ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
+                instance_profile_name = (
+                    os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
+                )
+                provider = get_provider(self.provider_name)
+                instance_id = provider.submit(
+                    LaunchSpec(
+                        instance_type=task_instance_type,
+                        region=task_region,
+                        ami_id=task_ami_id,
+                        user_data=cloud_init_user_data,
+                        key_name=ec2_key_name,
+                        instance_profile_name=instance_profile_name,
+                    )
+                )
+            except Exception as exc:
+                task_db.mark_task_completed(task, success=False)
+                raise exc
 
-        try:
-            task_db.mark_task_completed(task, success=True)
-        except Exception as exc:
-            raise exc
+            try:
+                task_db.mark_task_completed(task, success=True)
+            except Exception as exc:
+                raise exc
 
-        print(f"Processed launch task '{task}' with instance '{instance_id}'.")
+            print(f"Processed launch task '{task}' with instance '{instance_id}'.")

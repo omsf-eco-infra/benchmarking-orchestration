@@ -67,8 +67,6 @@ Each run includes:
 - `exception_traceback.log` when execution fails
 - `manifest.json`
 
-There are also Python helpers in `src/benchmarking_orchestration/analysis.py` for reading manifests from S3 and printing a summary table.
-
 ## Requirements
 
 - `pixi`
@@ -137,6 +135,7 @@ Database selection works like this:
 ### AWS
 
 - `AWS_PROFILE` or the usual AWS credential chain
+- `AWS_BENCHMARK_AMI_ID` as the approved AMI for `create aws`
 - `EC2_KEY_NAME` for optional SSH/debug access on launched instances
 - `EC2_IAM_INSTANCE_PROFILE` for the launched EC2 instance
 - `BENCHMARK_S3_BUCKET` as a default for `create aws --s3-bucket`
@@ -154,6 +153,8 @@ Database selection works like this:
 Queue AWS launch + benchmark tasks:
 
 ```bash
+export AWS_BENCHMARK_AMI_ID=ami-0123456789abcdef0
+
 pixi run python -m benchmarking_orchestration create aws g5.xlarge \
   --region us-east-1 \
   --cloud-init-file cloud_init.sh \
@@ -161,11 +162,15 @@ pixi run python -m benchmarking_orchestration create aws g5.xlarge \
   --s3-bucket my-benchmark-results
 ```
 
+The CLI prints the resolved AMI name and AMI ID, then asks for confirmation before queueing. For automation, pass `--yes` after you have verified the configured AMI.
+
 Process one queued launch task:
 
 ```bash
 pixi run python -m benchmarking_orchestration launch aws
 ```
+
+When `AWS_BENCHMARK_AMI_ID` is set, queued launch tasks must match that approved AMI or the launch is rejected.
 
 Run a benchmark worker locally for a capability:
 

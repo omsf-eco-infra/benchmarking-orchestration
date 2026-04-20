@@ -1,5 +1,5 @@
 import logging
-from typing import Iterable
+from typing import Iterable, Optional
 
 import exorcist
 import sqlalchemy as sqla
@@ -92,8 +92,7 @@ class TaskStatusDB(exorcist.TaskStatusDB):
             {"capability": row[0], "status": row[1], "count": row[2]} for row in rows
         ]
 
-    def check_out_task_with_capability(self, capability: str):
-        _logger.info("Checking out task")
+    def _select_task_with_capability(self, capability: str) -> sqla.Select:
         subq = (
             sqla.select(self.tasks_table.c.taskid)
             .select_from(
@@ -104,9 +103,30 @@ class TaskStatusDB(exorcist.TaskStatusDB):
             )
             .where(self.tasks_table.c.status == TaskStatus.AVAILABLE.value)
             .where(self.task_capabilities_table.c.capability == capability)
+            .order_by(
+                self.tasks_table.c.last_modified.asc(), self.tasks_table.c.taskid.asc()
+            )
             .limit(1)
-            .scalar_subquery()
         )
+        return subq
+
+    def peek_task_with_capability(self, capability: str) -> Optional[str]:
+        _logger.info("Peeking task")
+        select = self._select_task_with_capability(capability)
+
+        with self.engine.begin() as conn:
+            result = list(conn.execute(select))
+
+        if len(result) == 1:
+            taskid = result[0][0]
+            return taskid
+        elif len(result) == 0:
+            _logger.info("Unable to select an available task")
+            return None  # skip extra logging
+
+    def check_out_task_with_capability(self, capability: str):
+        _logger.info("Checking out task")
+        subq = self._select_task_with_capability(capability).scalar_subquery()
 
         with self.engine.begin() as conn:
             update_stmt = self._task_row_update_statement(

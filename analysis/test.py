@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.22.0"
+__generated_with = "0.21.1"
 app = marimo.App(width="medium")
 
 
@@ -119,7 +119,7 @@ def _(conn):
             mcl1,
             thrombin
         FROM read_json(
-            's3://benchmark-bucket-omsf-2026/runs/2026-03-*/**/output/md_benchmark.out'
+            's3://benchmark-bucket-omsf-2026/runs/2026-*-*/**/output/md_benchmark.out'
         );
         """
     )
@@ -132,8 +132,9 @@ def _(conn):
             split_part(bench_task_id, ':', 3) AS instance_type,
             split_part(bench_task_id, ':', 4) AS ami
         FROM read_json(
-            's3://benchmark-bucket-omsf-2026/runs/2026-03-*/**/manifest.json'
-        );
+            's3://benchmark-bucket-omsf-2026/runs/2026-*-*/**/manifest.json'
+        )
+        WHERE schema_version = 4;
         """
     )
 
@@ -199,17 +200,38 @@ def _(conn):
 
 @app.cell(hide_code=True)
 def _(benchmark_costs, conn, mo):
+    _df = mo.sql(
+        f"""
+        SELECT
+            run_date,
+            instance_type,
+            median(metric_value) AS metric_value,
+            median(ns_per_dollar) as ns_per_dollar,
+            benchmark
+        FROM benchmark_costs
+        WHERE benchmark_type = 'md' AND run_date = '2026-04-16'
+        GROUP BY run_date, instance_type, benchmark
+        ORDER BY run_date, metric_value DESC;
+        """,
+        engine=conn,
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def _(benchmark_costs, conn, mo):
     median_md_cost = mo.sql(
         f"""
-        SELECT 
+        SELECT
+            run_date,
             instance_type,
-            benchmark,
             median(metric_value) AS metric_value,
-            median(ns_per_dollar) as ns_per_dollar
+            median(ns_per_dollar) as ns_per_dollar,
+            benchmark
         FROM benchmark_costs
         WHERE benchmark_type = 'md' 
-        GROUP BY 1, 2
-        ORDER BY metric_value DESC;
+        GROUP BY run_date, instance_type, benchmark
+        ORDER BY run_date, metric_value DESC;
         """,
         engine=conn,
     )

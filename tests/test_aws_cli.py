@@ -89,7 +89,7 @@ def test_launch_with_no_tasks_prints_message(capsys):
     fake_db = _FakeTaskDB(checkout_results=[None, None])
     config = _FakeConfig(fake_db)
 
-    AwsCLI().launch(config=config)
+    AwsCLI().launch(loop=False, config=config)
 
     out = capsys.readouterr().out
     assert "No available launch tasks" in out
@@ -117,7 +117,7 @@ def test_launch_processes_task_and_marks_success(monkeypatch):
     monkeypatch.setenv("EC2_KEY_NAME", "bench-key")
     monkeypatch.setenv("EC2_IAM_INSTANCE_PROFILE", "bench-profile")
 
-    AwsCLI().launch(config=config)
+    AwsCLI().launch(loop=False, config=config)
 
     assert fake_db.mark_calls == [{"taskid": taskid, "success": True}]
     assert len(captured) == 1
@@ -144,9 +144,48 @@ def test_launch_marks_failed_when_submit_raises(monkeypatch):
     monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _BrokenProvider())
 
     with pytest.raises(RuntimeError, match="boom"):
-        AwsCLI().launch(config=config)
+        AwsCLI().launch(loop=False, config=config)
 
     assert fake_db.mark_calls == [{"taskid": taskid, "success": False}]
+
+
+def test_loop_launch_retries_when_ec2_capacity_is_unavailable(monkeypatch, capsys):
+    taskid = (
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
+    )
+    fake_db = _FakeTaskDB(checkout_results=[taskid, None])
+    config = _FakeConfig(fake_db)
+    submit_calls: list[object] = []
+    sleep_calls: list[int] = []
+
+    class _FlakyProvider:
+        def submit(self, spec):
+            submit_calls.append(spec)
+            if len(submit_calls) == 1:
+                raise RuntimeError(
+                    "AWS error while launching instance type 'g5.xlarge' with AMI "
+                    "'ami-0abc123456789def0' in region 'us-east-1': "
+                    "InsufficientInstanceCapacity"
+                )
+            return "i-1234567890abcdef0"
+
+    monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _FlakyProvider())
+    monkeypatch.setattr(
+        aws_cli_module, "get_instance_type_vcpu_count", lambda _itype: 4
+    )
+    monkeypatch.setattr(aws_cli_module, "get_ondemand_g_vcpu_quota", lambda: 8)
+    monkeypatch.setattr(aws_cli_module, "get_ondemand_g_vcpus_used", lambda: 0)
+    monkeypatch.setattr(
+        aws_cli_module.time, "sleep", lambda seconds: sleep_calls.append(seconds)
+    )
+
+    AwsCLI().launch(loop=True, config=config)
+
+    out = capsys.readouterr().out
+    assert len(submit_calls) == 2
+    assert sleep_calls == [aws_cli_module.CAPACITY_RETRY_SLEEP_SECONDS]
+    assert fake_db.mark_calls == [{"taskid": taskid, "success": True}]
+    assert "Processed launch task" in out
 
 
 def test_worker_launch_capability_delegates_to_launch(monkeypatch):
@@ -560,8 +599,7 @@ def test_create_uses_approved_ami_from_environment(monkeypatch):
 
 def test_launch_rejects_task_with_unapproved_ami(monkeypatch):
     taskid = (
-        "us-east-1:g5.xlarge:ami-0abc123456789def0:"
-        "12345678-1234-5678-1234-567812345678"
+        "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     )
     fake_db = _FakeTaskDB(checkout_results=[taskid, taskid])
     config = _FakeConfig(fake_db)
@@ -569,6 +607,6 @@ def test_launch_rejects_task_with_unapproved_ami(monkeypatch):
     monkeypatch.setenv("AWS_BENCHMARK_AMI_ID", "ami-0123456789abcdef0")
 
     with pytest.raises(RuntimeError, match="Queued launch task AMI does not match"):
-        AwsCLI().launch(config=config)
+        AwsCLI().launch(loop=False, config=config)
 
     assert fake_db.mark_calls == [{"taskid": taskid, "success": False}]
