@@ -38,6 +38,7 @@ from . import LaunchSpec, get_provider
 from .cli_protocol import Config, ProviderCLI
 
 CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
+WIGGLE_ROOM = 8
 
 
 def _normalize_optional_ami_id(ami_id: str | None) -> str | None:
@@ -184,7 +185,7 @@ def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
     needed_vcpus = get_instance_type_vcpu_count(instance_type)
     quota = get_ondemand_g_vcpu_quota()
     used = get_ondemand_g_vcpus_used()
-    available = quota - used
+    available = quota - used - WIGGLE_ROOM
     if needed_vcpus <= available:
         return
 
@@ -590,7 +591,10 @@ class AwsCLI(ProviderCLI):
             except Exception as exc:
                 raise exc
 
-            print(f"Processed launch task '{task}' with instance '{instance_id}'.")
+            print(
+                f"Processed launch task '{task}' with instance '{instance_id}'.",
+                flush=True,
+            )
 
     def launch(self, loop: bool, *, config: Config | None = None):
         """
