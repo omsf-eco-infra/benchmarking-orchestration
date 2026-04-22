@@ -148,7 +148,8 @@ def _write_fake_mps_benchmark_script(
     )
     script.write_text(
         "import click\nimport json\nimport pathlib\n\n"
-        f"MISMATCH_PROCESS_INDEX = {mismatch_index_text}\n\n"
+        f"MISMATCH_PROCESS_INDEX = {mismatch_index_text}\n"
+        f"IS_RBFE = {str(script_name == 'rbfe_benchmark.py')}\n\n"
         "def _process_index(output_file):\n"
         "    name = pathlib.Path(output_file).name\n"
         "    if '.process-' not in name:\n"
@@ -160,7 +161,15 @@ def _write_fake_mps_benchmark_script(
         "@click.option('--output_file', required=True)\n"
         "def run_benchmark(input_file, output_file):\n"
         "    process_index = _process_index(output_file)\n"
-        "    payload = {'system_a': float(process_index + 1)}\n"
+        "    if IS_RBFE:\n"
+        "        payload = {\n"
+        "            'system_a': {\n"
+        "                'solvent': float(process_index + 1),\n"
+        "                'complex': float(process_index + 1),\n"
+        "            }\n"
+        "        }\n"
+        "    else:\n"
+        "        payload = {'system_a': float(process_index + 1)}\n"
         "    if MISMATCH_PROCESS_INDEX is not None and process_index == MISMATCH_PROCESS_INDEX:\n"
         "        payload = {'unexpected_system': float(process_index + 1)}\n"
         "    print(f'child process {process_index}')\n"
@@ -547,7 +556,9 @@ def test_run_benchmark_aggregates_mps_outputs_for_rbfe(tmp_path):
     output_payload = json.loads(uploaded_by_key[output_key])
     manifest = json.loads(uploaded_by_key[manifest_key])
 
-    assert output_payload == {"system_a": 3.0}
+    assert output_payload == {
+        "system_a": {"solvent": 3.0, "complex": 3.0}
+    }
     assert manifest["benchmark_kind"] == "rbfe"
     assert manifest["mps_process_count"] == 2
     assert manifest["execution"]["success"] is True

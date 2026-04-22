@@ -408,7 +408,8 @@ def _combine_text_files(destination: Path, source_paths: list[Path]) -> None:
 def _load_numeric_output_payload(
     input_payload: object,
     output_file: Path,
-) -> dict[str, float]:
+    kind: BenchmarkKind,
+) -> dict[str, float | dict[str, float]]:
     """Load one benchmark output JSON and validate numeric payload values.
 
     Parameters
@@ -417,6 +418,8 @@ def _load_numeric_output_payload(
         Parsed benchmark input payload used for key validation.
     output_file : Path
         Output JSON file to parse.
+    kind: BenchmarkKind,
+        Which benchmark was executed
 
     Returns
     -------
@@ -438,7 +441,7 @@ def _load_numeric_output_payload(
         raise RuntimeError(
             f"Benchmark output file '{output_file.name}' is not valid JSON: {exc}"
         ) from exc
-
+    # Validate that the input/output keys both exist
     output_validation_ok, output_validation_message = _validate_output_against_input(
         input_payload,
         output_payload,
@@ -449,15 +452,26 @@ def _load_numeric_output_payload(
             f"{output_validation_message}"
         )
 
+    # Merge
     assert isinstance(output_payload, dict)
-    normalized_payload: dict[str, float] = {}
-    for system_name, value in output_payload.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise RuntimeError(
-                f"Benchmark output file '{output_file.name}' has a non-numeric "
-                f"value for system '{system_name}'."
-            )
-        normalized_payload[str(system_name)] = float(value)
+    normalized_payload: dict = {}
+    match kind:
+        case BenchmarkKind.MD:
+            for system_name, value in output_payload.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise RuntimeError(
+                        f"Benchmark output file '{output_file.name}' has a non-numeric "
+                        f"value for system '{system_name}'."
+                    )
+                normalized_payload[str(system_name)] = float(value)
+        case BenchmarkKind.RBFE:
+            for system_name, value in output_payload.items():
+                solvent_result = value["solvent"]
+                complex_result = value["complex"]
+                normalized_payload[str(system_name)] = {
+                    "solvent": solvent_result,
+                    "complex": complex_result,
+                }
 
     return normalized_payload
 
@@ -466,6 +480,7 @@ def _aggregate_child_outputs(
     input_payload: object,
     child_output_files: list[Path],
     aggregate_output_file: Path,
+    kind: BenchmarkKind,
 ) -> None:
     """Aggregate validated child benchmark outputs into one canonical JSON file.
 
@@ -486,14 +501,22 @@ def _aggregate_child_outputs(
     if not child_output_files:
         raise RuntimeError("No child benchmark outputs were produced for aggregation.")
 
-    aggregated_payload: dict[str, float] = {}
+    aggregated_payload: dict = {}
     for child_output_file in child_output_files:
-        child_payload = _load_numeric_output_payload(input_payload, child_output_file)
+        child_payload = _load_numeric_output_payload(
+            input_payload, child_output_file, kind
+        )
         if not aggregated_payload:
             aggregated_payload = dict(child_payload)
             continue
-        for system_name, value in child_payload.items():
-            aggregated_payload[system_name] += value
+        match kind:
+            case BenchmarkKind.MD:
+                for system_name, value in child_payload.items():
+                    aggregated_payload[system_name] += value
+            case BenchmarkKind.RBFE:
+                for system_name, values in child_payload.items():
+                    aggregated_payload[system_name]["complex"] += values["complex"]
+                    aggregated_payload[system_name]["solvent"] += values["solvent"]
 
     aggregate_output_file.write_text(
         json.dumps(aggregated_payload, indent=2, sort_keys=True),
@@ -801,6 +824,7 @@ def run_benchmark(
                             if isinstance(child_artifact["output_path"], Path)
                         ],
                         output_file,
+                        benchmark_kind,
                     )
                 except Exception as exc:
                     run_exception = exc
