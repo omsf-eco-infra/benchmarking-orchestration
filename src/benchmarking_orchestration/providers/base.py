@@ -38,15 +38,6 @@ class Provider(Protocol):
 
     name: str
 
-    def validate_spec(self, spec: LaunchSpec) -> None:
-        """Validate launch-related fields for a provider.
-
-        Parameters
-        ----------
-        spec : LaunchSpec
-            Launch specification containing one or more fields to validate.
-        """
-
     def submit(self, spec: LaunchSpec) -> str:
         """Submit a launch request and return a provider instance handle.
 
@@ -75,15 +66,4 @@ class Provider(Protocol):
         -------
         str
             Provider-specific status string.
-        """
-
-    def cancel(self, handle: str, region: str) -> None:
-        """Cancel or terminate a provider resource.
-
-        Parameters
-        ----------
-        handle : str
-            Provider-specific instance or job identifier.
-        region : str
-            Region containing the resource.
         """

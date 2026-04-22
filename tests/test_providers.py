@@ -19,40 +19,6 @@ def test_get_provider_rejects_unknown_provider():
         get_provider("modal")
 
 
-def test_aws_provider_validate_spec_calls_instance_type_validation(monkeypatch):
-    provider = AwsProvider()
-    calls = []
-
-    monkeypatch.setattr(
-        aws_provider_module.aws_helpers,
-        "validate_launch_instance_type",
-        lambda instance_type, region: calls.append(
-            {"instance_type": instance_type, "region": region}
-        ),
-    )
-
-    provider.validate_spec(LaunchSpec(instance_type="g5.xlarge", region="us-east-1"))
-
-    assert calls == [{"instance_type": "g5.xlarge", "region": "us-east-1"}]
-
-
-def test_aws_provider_validate_spec_calls_ami_validation(monkeypatch):
-    provider = AwsProvider()
-    calls = []
-
-    monkeypatch.setattr(
-        aws_provider_module.aws_helpers,
-        "validate_launch_ami",
-        lambda ami_id, region: calls.append({"ami_id": ami_id, "region": region}),
-    )
-
-    provider.validate_spec(
-        LaunchSpec(ami_id="ami-0123456789abcdef0", region="us-east-1")
-    )
-
-    assert calls == [{"ami_id": "ami-0123456789abcdef0", "region": "us-east-1"}]
-
-
 def test_aws_provider_submit_delegates_to_launch_helper(monkeypatch):
     provider = AwsProvider()
     calls = []

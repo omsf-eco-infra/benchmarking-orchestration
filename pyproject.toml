@@ -37,6 +37,7 @@ pytest-xdist = ">=3.8.0,<4"
 pytest = ">=9.0.2,<10"
 pytest-cov = ">=7.1.0,<8"
 moto = ">=5.1.22,<6"
+vulture = ">=2.16,<3"
 
 [tool.pixi.feature.test.tasks]
 test = "pytest -q -n auto"

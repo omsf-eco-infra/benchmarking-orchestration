@@ -17,32 +17,6 @@ class AwsProvider:
 
     name: str = "aws"
 
-    def validate_spec(self, spec: LaunchSpec) -> None:
-        """Validate launch specification fields against AWS.
-
-        Parameters
-        ----------
-        spec : LaunchSpec
-            Launch specification containing optional fields to validate.
-
-        Raises
-        ------
-        ValueError
-            If no launch fields are provided for validation.
-        """
-        if spec.instance_type is None and spec.ami_id is None:
-            raise ValueError(
-                "launch specification must include instance type and/or ami id."
-            )
-
-        if spec.instance_type is not None:
-            aws_helpers.validate_launch_instance_type(
-                spec.instance_type, region=spec.region
-            )
-
-        if spec.ami_id is not None:
-            aws_helpers.validate_launch_ami(spec.ami_id, region=spec.region)
-
     def submit(self, spec: LaunchSpec) -> str:
         """Launch an EC2 instance for a validated specification.
 
@@ -133,43 +107,3 @@ class AwsProvider:
             )
 
         return state_name
-
-    def cancel(self, handle: str, region: str) -> None:
-        """Terminate an EC2 instance.
-
-        Parameters
-        ----------
-        handle : str
-            EC2 instance identifier.
-        region : str
-            AWS region for the instance.
-
-        Raises
-        ------
-        RuntimeError
-            If AWS request to terminate the instance fails.
-        """
-        normalized_handle = handle.strip()
-        if not normalized_handle:
-            raise ValueError("instance handle cannot be empty.")
-
-        normalized_region = region.strip()
-        if not normalized_region:
-            raise ValueError("region cannot be empty.")
-
-        ec2_client = boto3.client("ec2", region_name=normalized_region)
-        try:
-            ec2_client.terminate_instances(InstanceIds=[normalized_handle])
-        except ClientError as exc:
-            error = exc.response.get("Error", {})
-            code = error.get("Code", "")
-            message = error.get("Message", str(exc))
-            raise RuntimeError(
-                f"AWS error while terminating instance '{normalized_handle}' in region "
-                f"'{normalized_region}': {code or message}"
-            ) from exc
-        except BotoCoreError as exc:
-            raise RuntimeError(
-                f"AWS error while terminating instance '{normalized_handle}' in region "
-                f"'{normalized_region}': {exc}"
-            ) from exc
