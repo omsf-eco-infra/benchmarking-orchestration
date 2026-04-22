@@ -891,7 +891,7 @@ def run_benchmark(
                 manifest["ami_id"] = ami_id
             manifest["compute_provider"] = "aws"
         except:
-            print("MetadatService doesn't exist")
+            print("MetadataService doesn't exist")
             pass
 
         manifest_path = tmpdir_path / "manifest.json"

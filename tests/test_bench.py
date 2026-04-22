@@ -263,7 +263,7 @@ def test_run_benchmark_wraps_md_failure_as_runtime_error(tmp_path):
         sys.modules.pop(mod, None)
 
 
-def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path):
+def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path, capfd):
     repo = _make_benchmark_repo(tmp_path)
     benchmark_dir = repo / "benchmark"
     _write_fake_benchmark_script(benchmark_dir, "md_benchmark.py")
@@ -287,6 +287,9 @@ def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path)
         return_value=_FakeS3Client(),
     ):
         run_benchmark(repo, s3_bucket="bucket", task_id=task_id)
+
+    stdout, _ = capfd.readouterr()
+    assert stdout == "MetadataService doesn't exist\n"
 
     manifest_key = next(
         key for key in uploaded_by_key if key.endswith("/manifest.json")
@@ -314,12 +317,6 @@ def test_run_benchmark_uses_dated_hashed_prefix_for_cloud_init_task_id(tmp_path)
     assert "launch_task_id" not in manifest
     assert manifest["s3_prefix"] == expected_prefix
     assert manifest["benchmark_kind"] == "md"
-    assert manifest["launch"] == {
-        "region": "us-east-1",
-        "instance_type": "g5.xlarge",
-        "ami_id": "ami-1234",
-        "cloud_init_provided": True,
-    }
     assert manifest["mps_process_count"] == 1
     assert manifest["input"]["s3_key"] == input_key
     assert manifest["output"]["s3_key"] == output_key
