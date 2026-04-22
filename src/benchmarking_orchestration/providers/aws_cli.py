@@ -38,6 +38,7 @@ from . import LaunchSpec, get_provider
 from .cli_protocol import Config, ProviderCLI
 
 CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
+WIGGLE_ROOM = 8
 
 
 def _normalize_optional_ami_id(ami_id: str | None) -> str | None:
@@ -184,7 +185,7 @@ def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
     needed_vcpus = get_instance_type_vcpu_count(instance_type)
     quota = get_ondemand_g_vcpu_quota()
     used = get_ondemand_g_vcpus_used()
-    available = max(quota - used, 0)
+    available = max(quota - used - WIGGLE_ROOM, 0)
     if needed_vcpus <= available:
         return
 
@@ -197,7 +198,7 @@ def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
         time.sleep(CAPACITY_RETRY_SLEEP_SECONDS)
         quota = get_ondemand_g_vcpu_quota()
         used = get_ondemand_g_vcpus_used()
-        available = max(quota - used, 0)
+        available = max(quota - used - WIGGLE_ROOM, 0)
 
 
 def _is_insufficient_instance_capacity_error(exc: BaseException) -> bool:

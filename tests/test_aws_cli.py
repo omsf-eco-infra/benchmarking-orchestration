@@ -173,7 +173,11 @@ def test_loop_launch_retries_when_ec2_capacity_is_unavailable(monkeypatch, capsy
     monkeypatch.setattr(
         aws_cli_module, "get_instance_type_vcpu_count", lambda _itype: 4
     )
-    monkeypatch.setattr(aws_cli_module, "get_ondemand_g_vcpu_quota", lambda: 8)
+    monkeypatch.setattr(
+        aws_cli_module,
+        "get_ondemand_g_vcpu_quota",
+        lambda: aws_cli_module.WIGGLE_ROOM * 2,
+    )
     monkeypatch.setattr(aws_cli_module, "get_ondemand_g_vcpus_used", lambda: 0)
     monkeypatch.setattr(
         aws_cli_module.time, "sleep", lambda seconds: sleep_calls.append(seconds)
