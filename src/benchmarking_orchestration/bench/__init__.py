@@ -12,7 +12,7 @@ import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import boto3
 
@@ -405,6 +405,60 @@ def _combine_text_files(destination: Path, source_paths: list[Path]) -> None:
     _write_text_file(destination, "".join(combined_parts))
 
 
+def _coerce_output_value_to_float(
+    value: object,
+    output_file: Path,
+    system_name: str,
+    component_name: str | None = None,
+) -> float:
+    """Coerce one benchmark output value to a float.
+
+    Parameters
+    ----------
+    value : object
+        Raw JSON value to validate.
+    output_file : Path
+        Output file being parsed.
+    system_name : str
+        Benchmark system name associated with the value.
+    component_name : str | None, optional
+        Optional RBFE component name such as ``"solvent"`` or ``"complex"``.
+
+    Returns
+    -------
+    float
+        Validated numeric value.
+
+    Raises
+    ------
+    RuntimeError
+        If the value cannot be interpreted as a numeric benchmark result.
+    """
+    value_label = f"system '{system_name}'"
+    if component_name is not None:
+        value_label = f"system '{system_name}' component '{component_name}'"
+
+    if isinstance(value, bool):
+        raise RuntimeError(
+            f"Benchmark output file '{output_file.name}' has a non-numeric value "
+            f"for {value_label}."
+        )
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Benchmark output file '{output_file.name}' has a non-numeric "
+                f"value for {value_label}."
+            ) from exc
+    raise RuntimeError(
+        f"Benchmark output file '{output_file.name}' has a non-numeric value for "
+        f"{value_label}."
+    )
+
+
 def _load_numeric_output_payload(
     input_payload: object,
     output_file: Path,
@@ -458,19 +512,39 @@ def _load_numeric_output_payload(
     match kind:
         case BenchmarkKind.MD:
             for system_name, value in output_payload.items():
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    raise RuntimeError(
-                        f"Benchmark output file '{output_file.name}' has a non-numeric "
-                        f"value for system '{system_name}'."
-                    )
-                normalized_payload[str(system_name)] = float(value)
+                normalized_payload[str(system_name)] = _coerce_output_value_to_float(
+                    value,
+                    output_file,
+                    str(system_name),
+                )
         case BenchmarkKind.RBFE:
             for system_name, value in output_payload.items():
-                solvent_result = value["solvent"]
-                complex_result = value["complex"]
+                if not isinstance(value, dict):
+                    raise RuntimeError(
+                        f"Benchmark output file '{output_file.name}' has an invalid "
+                        f"RBFE payload for system '{system_name}'."
+                    )
+                try:
+                    solvent_result = value["solvent"]
+                    complex_result = value["complex"]
+                except KeyError as exc:
+                    raise RuntimeError(
+                        f"Benchmark output file '{output_file.name}' is missing RBFE "
+                        f"component '{exc.args[0]}' for system '{system_name}'."
+                    ) from exc
                 normalized_payload[str(system_name)] = {
-                    "solvent": solvent_result,
-                    "complex": complex_result,
+                    "solvent": _coerce_output_value_to_float(
+                        solvent_result,
+                        output_file,
+                        str(system_name),
+                        "solvent",
+                    ),
+                    "complex": _coerce_output_value_to_float(
+                        complex_result,
+                        output_file,
+                        str(system_name),
+                        "complex",
+                    ),
                 }
 
     return normalized_payload
@@ -914,9 +988,8 @@ def run_benchmark(
             if ami_id:
                 manifest["ami_id"] = ami_id
             manifest["compute_provider"] = "aws"
-        except:
+        except Exception:
             print("MetadataService doesn't exist")
-            pass
 
         manifest_path = tmpdir_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from benchmarking_orchestration.benchmark_kind import BenchmarkKind
-from benchmarking_orchestration.bench import run_benchmark
+from benchmarking_orchestration.bench import _aggregate_child_outputs, run_benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +518,32 @@ def test_run_benchmark_aggregates_mps_outputs_for_md(tmp_path):
         sys.modules.pop(mod, None)
 
 
+def test_aggregate_child_outputs_for_rbfe_coerces_numeric_strings(tmp_path):
+    input_payload = {"system_a": {"edge": "edge.json"}}
+    child_output_a = tmp_path / "rbfe_benchmark.process-0.out"
+    child_output_b = tmp_path / "rbfe_benchmark.process-1.out"
+    aggregate_output = tmp_path / "rbfe_benchmark.out"
+    child_output_a.write_text(
+        json.dumps({"system_a": {"solvent": "1.5", "complex": 2.0}}),
+        encoding="utf-8",
+    )
+    child_output_b.write_text(
+        json.dumps({"system_a": {"solvent": 3.0, "complex": "4.5"}}),
+        encoding="utf-8",
+    )
+
+    _aggregate_child_outputs(
+        input_payload,
+        [child_output_a, child_output_b],
+        aggregate_output,
+        BenchmarkKind.RBFE,
+    )
+
+    assert json.loads(aggregate_output.read_text(encoding="utf-8")) == {
+        "system_a": {"solvent": 4.5, "complex": 6.5}
+    }
+
+
 def test_run_benchmark_aggregates_mps_outputs_for_rbfe(tmp_path):
     repo = _make_benchmark_repo(tmp_path)
     benchmark_dir = repo / "benchmark"
@@ -556,9 +582,7 @@ def test_run_benchmark_aggregates_mps_outputs_for_rbfe(tmp_path):
     output_payload = json.loads(uploaded_by_key[output_key])
     manifest = json.loads(uploaded_by_key[manifest_key])
 
-    assert output_payload == {
-        "system_a": {"solvent": 3.0, "complex": 3.0}
-    }
+    assert output_payload == {"system_a": {"solvent": 3.0, "complex": 3.0}}
     assert manifest["benchmark_kind"] == "rbfe"
     assert manifest["mps_process_count"] == 2
     assert manifest["execution"]["success"] is True
