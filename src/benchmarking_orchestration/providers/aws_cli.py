@@ -360,6 +360,7 @@ class AwsCLI(ProviderCLI):
 
                 assert bench_repo_path
                 try:
+                    # TODO: We need to abstract this away
                     run_benchmark(
                         benchmark_repo_path=bench_repo_path,
                         s3_bucket=s3_bucket,

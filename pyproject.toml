@@ -2,7 +2,6 @@
 authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
 dependencies = [
     "cyclopts>=4.10.1",
-    "sqlalchemy-libsql>=0.2.0,<0.3",
 ]
 name = "benchmarking-orchestration"
 requires-python = ">= 3.11"

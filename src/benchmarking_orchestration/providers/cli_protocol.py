@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Optional, Protocol
 
 from cyclopts import App, Parameter, validators
 
@@ -27,10 +27,6 @@ class ProviderCLI(Protocol):
             Cyclopts app group used for launch-worker commands.
         worker_app : App
             Cyclopts app group used for worker commands.
-        shared_services : dict[str, Any]
-            Shared callables/config used by command handlers (for example,
-            DB setup helpers, task parsers, benchmark runners, and env readers).
-
         Returns
         -------
         None
