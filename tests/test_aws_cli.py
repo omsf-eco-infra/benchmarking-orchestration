@@ -332,9 +332,9 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     )
 
     AwsCLI().create(
-        instance_type="g5.xlarge",
-        region="us-east-1",
-        ami_id="ami-0abc123456789def0",
+        instance_type=" G5.XLARGE ",
+        region=" us-east-1 ",
+        ami_id=" AMI-0ABC123456789DEF0 ",
         cloud_init_file=Path("cloud-init.sh"),
         benchmark_kind=BenchmarkKind.MD,
         s3_bucket="bench-results",

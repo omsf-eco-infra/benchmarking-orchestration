@@ -55,16 +55,20 @@ def _resolve_required_ami_id(ami_id: str | None) -> str:
         If no AMI identifier is provided explicitly or via the approved
         environment variable.
     """
-    if ami_id is not None:
-        return ami_id
+    candidate_ami_id = ami_id
+    if candidate_ami_id is None:
+        candidate_ami_id = os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
 
-    configured_ami_id = os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
-    if configured_ami_id is not None:
-        return configured_ami_id
+    if candidate_ami_id is None:
+        raise ValueError(
+            f"AMI ID is required. Pass --ami-id or set {DEFAULT_LAUNCH_AMI_ENV_VAR}."
+        )
 
-    raise ValueError(
-        f"AMI ID is required. Pass --ami-id or set {DEFAULT_LAUNCH_AMI_ENV_VAR}."
-    )
+    normalized_ami_id = candidate_ami_id.strip().lower()
+    if not normalized_ami_id:
+        raise ValueError("ami id cannot be empty.")
+
+    return normalized_ami_id
 
 
 def _confirm_ami_choice(
@@ -134,7 +138,7 @@ def _validate_launch_task_ami_against_expected(task_ami_id: str) -> None:
     if configured_ami_id is None:
         return
 
-    if task_ami_id != configured_ami_id:
+    if task_ami_id != configured_ami_id.strip().lower():
         raise RuntimeError(
             "Queued launch task AMI does not match the approved AMI. "
             f"Task AMI: '{task_ami_id}'. Approved AMI from "
@@ -450,6 +454,10 @@ class AwsCLI(ProviderCLI):
             config = Config()
         task_db = config.task_db
 
+        instance_type = instance_type.strip().lower()
+        region = region.strip()
+        if not region:
+            raise ValueError("region cannot be empty.")
         resolved_ami_id = _resolve_required_ami_id(ami_id)
 
         if mps_process_count < 1:

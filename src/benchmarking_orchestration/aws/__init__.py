@@ -306,17 +306,14 @@ def get_launch_ami_details(
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
-            f"AWS error while validating AMI '{ami_id}' in region "
-            f"'{region}': {exc}"
+            f"AWS error while validating AMI '{ami_id}' in region '{region}': {exc}"
         ) from exc
 
     images = response.get("Images", [])
     first_image = images[0] if images else {}
     state = first_image.get("State")
     if not first_image or state != "available":
-        raise RuntimeError(
-            f"AMI '{ami_id}' is unavailable in region '{region}'."
-        )
+        raise RuntimeError(f"AMI '{ami_id}' is unavailable in region '{region}'.")
 
     return first_image
 
