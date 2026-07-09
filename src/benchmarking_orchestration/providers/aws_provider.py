@@ -6,8 +6,6 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .. import aws as aws_helpers
-from .base import LaunchSpec
-
 DEFAULT_LAUNCH_AMI_ID = aws_helpers.DEFAULT_LAUNCH_AMI_ID
 
 
@@ -17,36 +15,45 @@ class AwsProvider:
 
     name: str = "aws"
 
-    def submit(self, spec: LaunchSpec) -> str:
-        """Launch an EC2 instance for a validated specification.
+    def submit(
+        self,
+        instance_type: str,
+        ami_id: str,
+        region: str,
+        user_data: str | None,
+        key_name: str | None,
+        instance_profile_name: str | None,
+    ) -> str:
+        """Launch an EC2 instance.
 
         Parameters
         ----------
-        spec : LaunchSpec
-            Launch specification containing required AWS launch fields.
+        instance_type : str
+            EC2 instance type to launch.
+        ami_id : str
+            AMI identifier to use.
+        region : str
+            AWS region where the instance is launched.
+        user_data : str | None
+            Optional startup payload for the instance.
+        key_name : str | None
+            Optional EC2 SSH key pair name.
+        instance_profile_name : str | None
+            Optional IAM instance profile name.
 
         Returns
         -------
         str
             Launched EC2 instance identifier.
 
-        Raises
-        ------
-        ValueError
-            If required AWS launch fields are missing.
         """
-        if spec.instance_type is None:
-            raise ValueError("launch specification must include instance type.")
-        if spec.ami_id is None:
-            raise ValueError("launch specification must include ami id.")
-
         return aws_helpers.launch_ec2_instance(
-            spec.instance_type,
-            ami_id=spec.ami_id,
-            region=spec.region,
-            user_data=spec.user_data,
-            key_name=spec.key_name,
-            instance_profile_name=spec.instance_profile_name,
+            instance_type,
+            ami_id=ami_id,
+            region=region,
+            user_data=user_data,
+            key_name=key_name,
+            instance_profile_name=instance_profile_name,
         )
 
     def status(self, handle: str, region: str) -> str:

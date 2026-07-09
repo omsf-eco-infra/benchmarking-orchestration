@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .aws_provider import AwsProvider, DEFAULT_LAUNCH_AMI_ID
-from .base import LaunchSpec, Provider
+from .base import Provider
 
 DEFAULT_PROVIDER_NAME = "aws"
 
@@ -49,7 +49,6 @@ __all__ = [
     "AwsProvider",
     "DEFAULT_LAUNCH_AMI_ID",
     "DEFAULT_PROVIDER_NAME",
-    "LaunchSpec",
     "Provider",
     "get_provider",
     "_provider_choices",

@@ -2,7 +2,6 @@ import pytest
 
 from benchmarking_orchestration.providers import (
     AwsProvider,
-    LaunchSpec,
     get_provider,
 )
 import benchmarking_orchestration.providers.aws_provider as aws_provider_module
@@ -42,14 +41,12 @@ def test_aws_provider_submit_delegates_to_launch_helper(monkeypatch):
     )
 
     instance_id = provider.submit(
-        LaunchSpec(
-            instance_type="g5.xlarge",
-            ami_id="ami-0123456789abcdef0",
-            region="us-east-1",
-            user_data="#cloud-config\n",
-            key_name="my-key",
-            instance_profile_name="my-profile",
-        )
+        "g5.xlarge",
+        "ami-0123456789abcdef0",
+        "us-east-1",
+        "#cloud-config\n",
+        "my-key",
+        "my-profile",
     )
 
     assert instance_id == "i-1234567890abcdef0"

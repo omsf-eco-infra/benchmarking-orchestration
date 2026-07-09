@@ -109,8 +109,8 @@ def test_launch_processes_task_and_marks_success(monkeypatch):
     captured: list[object] = []
 
     class _FakeProvider:
-        def submit(self, spec):
-            captured.append(spec)
+        def submit(self, *launch_values):
+            captured.append(launch_values)
             return "i-1234567890abcdef0"
 
     monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _FakeProvider())
@@ -121,12 +121,14 @@ def test_launch_processes_task_and_marks_success(monkeypatch):
 
     assert fake_db.mark_calls == [{"taskid": taskid, "success": True}]
     assert len(captured) == 1
-    assert captured[0].instance_type == "g5.xlarge"
-    assert captured[0].ami_id == "ami-0abc123456789def0"
-    assert captured[0].region == "us-east-1"
-    assert captured[0].user_data == cloud_init_text
-    assert captured[0].key_name == "bench-key"
-    assert captured[0].instance_profile_name == "bench-profile"
+    assert captured[0] == (
+        "g5.xlarge",
+        "ami-0abc123456789def0",
+        "us-east-1",
+        cloud_init_text,
+        "bench-key",
+        "bench-profile",
+    )
 
 
 def test_launch_marks_failed_when_submit_raises(monkeypatch):
@@ -138,7 +140,7 @@ def test_launch_marks_failed_when_submit_raises(monkeypatch):
     config = _FakeConfig(fake_db)
 
     class _BrokenProvider:
-        def submit(self, spec):
+        def submit(self, *_launch_values):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _BrokenProvider())
@@ -159,8 +161,8 @@ def test_loop_launch_retries_when_ec2_capacity_is_unavailable(monkeypatch, capsy
     sleep_calls: list[int] = []
 
     class _FlakyProvider:
-        def submit(self, spec):
-            submit_calls.append(spec)
+        def submit(self, *launch_values):
+            submit_calls.append(launch_values)
             if len(submit_calls) == 1:
                 raise RuntimeError(
                     "AWS error while launching instance type 'g5.xlarge' with AMI "

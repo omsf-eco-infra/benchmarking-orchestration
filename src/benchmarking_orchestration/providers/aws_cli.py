@@ -28,7 +28,7 @@ from ..task_id import (
     _parse_bench_task_metadata,
     _parse_launch_task_id,
 )
-from . import LaunchSpec, get_provider
+from . import get_provider
 from .cli_protocol import Config, ProviderCLI
 
 CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
@@ -194,11 +194,15 @@ def _is_insufficient_instance_capacity_error(exc: BaseException) -> bool:
     return error.get("Code") == "InsufficientInstanceCapacity"
 
 
-def _submit_loop_launch_spec(
+def _submit_loop_launch_task(
     task: str,
     instance_type: str,
     provider: Any,
-    launch_spec: LaunchSpec,
+    ami_id: str,
+    region: str,
+    user_data: str | None,
+    key_name: str | None,
+    instance_profile_name: str | None,
 ) -> str:
     """Submit a looped AWS launch task with quota waits and capacity retries.
 
@@ -210,8 +214,16 @@ def _submit_loop_launch_spec(
         EC2 instance type requested by the launch task.
     provider : Any
         Provider implementation used to submit the launch request.
-    launch_spec : LaunchSpec
-        Launch specification sent to the provider.
+    ami_id : str
+        AMI identifier to use.
+    region : str
+        AWS region where the instance is launched.
+    user_data : str | None
+        Optional startup payload for the instance.
+    key_name : str | None
+        Optional EC2 SSH key pair name.
+    instance_profile_name : str | None
+        Optional IAM instance profile name.
 
     Returns
     -------
@@ -226,7 +238,14 @@ def _submit_loop_launch_spec(
     while True:
         _wait_for_ondemand_g_vcpu_quota(task, instance_type)
         try:
-            return provider.submit(launch_spec)
+            return provider.submit(
+                instance_type,
+                ami_id,
+                region,
+                user_data,
+                key_name,
+                instance_profile_name,
+            )
         except Exception as exc:
             if not _is_insufficient_instance_capacity_error(exc):
                 raise
@@ -548,23 +567,26 @@ class AwsCLI(ProviderCLI):
             ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
             instance_profile_name = os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
             provider = get_provider(self.provider_name)
-            launch_spec = LaunchSpec(
-                instance_type=task_instance_type,
-                region=task_region,
-                ami_id=task_ami_id,
-                user_data=cloud_init_user_data,
-                key_name=ec2_key_name,
-                instance_profile_name=instance_profile_name,
-            )
             instance_id = (
-                _submit_loop_launch_spec(
+                _submit_loop_launch_task(
                     task=task,
                     instance_type=task_instance_type,
                     provider=provider,
-                    launch_spec=launch_spec,
+                    ami_id=task_ami_id,
+                    region=task_region,
+                    user_data=cloud_init_user_data,
+                    key_name=ec2_key_name,
+                    instance_profile_name=instance_profile_name,
                 )
                 if retry_for_capacity
-                else provider.submit(launch_spec)
+                else provider.submit(
+                    task_instance_type,
+                    task_ami_id,
+                    task_region,
+                    cloud_init_user_data,
+                    ec2_key_name,
+                    instance_profile_name,
+                )
             )
         except Exception as exc:
             task_db.mark_task_completed(task, success=False)
