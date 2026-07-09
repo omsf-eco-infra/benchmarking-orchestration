@@ -61,22 +61,6 @@ def _normalize_region(region: str) -> str:
     return _normalize_required_value("region", region)
 
 
-def _normalize_db_path(db_path: str) -> str:
-    """Normalize a task database path value.
-
-    Parameters
-    ----------
-    db_path : str
-        Raw database path argument from the CLI.
-
-    Returns
-    -------
-    str
-        Stripped path value.
-    """
-    return _normalize_required_value("db path", db_path)
-
-
 def _normalize_ami_id(ami_id: str) -> str:
     """Normalize and lowercase an AMI identifier value.
 
