@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-import click
-
 
 class WorkerCapability(StrEnum):
     """Supported worker capability names."""
@@ -33,7 +31,7 @@ def _resolve_bench_worker_capability(instance_type: str) -> WorkerCapability:
 
     Raises
     ------
-    click.ClickException
+    ValueError
         If the instance family does not map to a supported worker capability.
     """
     instance_family = instance_type.split(".", maxsplit=1)[0]
@@ -53,7 +51,7 @@ def _resolve_bench_worker_capability(instance_type: str) -> WorkerCapability:
     try:
         return WorkerCapability(instance_family)
     except ValueError as exc:
-        raise click.ClickException(
+        raise ValueError(
             f"Unsupported benchmark worker capability for instance family "
             f"'{instance_family}'."
         ) from exc

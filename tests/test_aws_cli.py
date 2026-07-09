@@ -281,10 +281,10 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     monkeypatch.setattr(
         aws_cli_module,
         "get_launch_ami_details",
-        lambda ami_id, region: ami_details_calls.append(
-            {"ami_id": ami_id, "region": region}
-        )
-        or {"Name": f"approved-{ami_id}-{region}"},
+        lambda ami_id, region: (
+            ami_details_calls.append({"ami_id": ami_id, "region": region})
+            or {"Name": f"approved-{ami_id}-{region}"}
+        ),
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -325,9 +325,9 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     )
 
     AwsCLI().create(
-        instance_type=" G5.XLARGE ",
-        region=" us-east-1 ",
-        ami_id=" AMI-0ABC123456789DEF0 ",
+        instance_type="g5.xlarge",
+        region="us-east-1",
+        ami_id="ami-0abc123456789def0",
         cloud_init_file=Path("cloud-init.sh"),
         benchmark_kind=BenchmarkKind.MD,
         s3_bucket="bench-results",
@@ -536,7 +536,7 @@ def test_create_uses_approved_ami_from_environment(monkeypatch):
     config = _FakeConfig(fake_db)
     ami_details_calls: list[dict[str, str]] = []
 
-    monkeypatch.setenv("AWS_BENCHMARK_AMI_ID", "AMI-0ABC123456789DEF0")
+    monkeypatch.setenv("AWS_BENCHMARK_AMI_ID", "ami-0abc123456789def0")
     monkeypatch.setattr(
         aws_cli_module,
         "validate_launch_instance_type",
@@ -545,10 +545,10 @@ def test_create_uses_approved_ami_from_environment(monkeypatch):
     monkeypatch.setattr(
         aws_cli_module,
         "get_launch_ami_details",
-        lambda ami_id, region: ami_details_calls.append(
-            {"ami_id": ami_id, "region": region}
-        )
-        or {"Name": f"approved-{ami_id}-{region}"},
+        lambda ami_id, region: (
+            ami_details_calls.append({"ami_id": ami_id, "region": region})
+            or {"Name": f"approved-{ami_id}-{region}"}
+        ),
     )
     monkeypatch.setattr(
         aws_cli_module,

@@ -22,11 +22,6 @@ from ..bench import run_benchmark
 from ..benchmark_kind import BenchmarkKind
 from ..capabilities import WorkerCapability, _resolve_bench_worker_capability
 from ..cloud_init import _decode_cloud_init_base64, _read_cloud_init_file_as_base64
-from ..normalization import (
-    _normalize_ami_id,
-    _normalize_instance_type,
-    _normalize_region,
-)
 from ..task_id import (
     _build_bench_task_id,
     _build_task_id,
@@ -38,24 +33,6 @@ from .cli_protocol import Config, ProviderCLI
 
 CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
 WIGGLE_ROOM = 8
-
-
-def _normalize_optional_ami_id(ami_id: str | None) -> str | None:
-    """Normalize an optional AMI identifier.
-
-    Parameters
-    ----------
-    ami_id : str | None
-        Raw AMI identifier provided by the caller.
-
-    Returns
-    -------
-    str | None
-        Lowercased, normalized AMI identifier when provided, otherwise ``None``.
-    """
-    if ami_id is None:
-        return None
-    return _normalize_ami_id(ami_id)
 
 
 def _resolve_required_ami_id(ami_id: str | None) -> str:
@@ -70,7 +47,7 @@ def _resolve_required_ami_id(ami_id: str | None) -> str:
     Returns
     -------
     str
-        Normalized AMI identifier.
+        AMI identifier.
 
     Raises
     ------
@@ -78,13 +55,10 @@ def _resolve_required_ami_id(ami_id: str | None) -> str:
         If no AMI identifier is provided explicitly or via the approved
         environment variable.
     """
-    normalized_ami_id = _normalize_optional_ami_id(ami_id)
-    if normalized_ami_id is not None:
-        return normalized_ami_id
+    if ami_id is not None:
+        return ami_id
 
-    configured_ami_id = _normalize_optional_ami_id(
-        os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
-    )
+    configured_ami_id = os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
     if configured_ami_id is not None:
         return configured_ami_id
 
@@ -106,7 +80,7 @@ def _confirm_ami_choice(
     Parameters
     ----------
     ami_id : str
-        Normalized AMI identifier selected for queueing.
+        AMI identifier selected for queueing.
     ami_name : str
         Human-readable AMI name returned by AWS.
     region : str
@@ -156,17 +130,14 @@ def _validate_launch_task_ami_against_expected(task_ami_id: str) -> None:
     RuntimeError
         If an approved AMI is configured and the queued task AMI does not match it.
     """
-    configured_ami_id = _normalize_optional_ami_id(
-        os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
-    )
+    configured_ami_id = os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
     if configured_ami_id is None:
         return
 
-    normalized_task_ami_id = _normalize_ami_id(task_ami_id)
-    if normalized_task_ami_id != configured_ami_id:
+    if task_ami_id != configured_ami_id:
         raise RuntimeError(
             "Queued launch task AMI does not match the approved AMI. "
-            f"Task AMI: '{normalized_task_ami_id}'. Approved AMI from "
+            f"Task AMI: '{task_ami_id}'. Approved AMI from "
             f"{DEFAULT_LAUNCH_AMI_ENV_VAR}: '{configured_ami_id}'."
         )
 
@@ -463,28 +434,26 @@ class AwsCLI(ProviderCLI):
             config = Config()
         task_db = config.task_db
 
-        normalized_instance_type = _normalize_instance_type(instance_type)
-        normalized_region = _normalize_region(region)
-        normalized_ami_id = _resolve_required_ami_id(ami_id)
+        resolved_ami_id = _resolve_required_ami_id(ami_id)
 
         if mps_process_count < 1:
             raise ValueError("mps_process_count must be greater than or equal to 1.")
 
-        validate_launch_instance_type(normalized_instance_type, normalized_region)
-        ami_details = get_launch_ami_details(normalized_ami_id, normalized_region)
+        validate_launch_instance_type(instance_type, region)
+        ami_details = get_launch_ami_details(resolved_ami_id, region)
         ami_name = str(
             ami_details.get("Name")
             or ami_details.get("Description")
             or ami_details.get("ImageId")
         )
         _confirm_ami_choice(
-            normalized_ami_id,
+            resolved_ami_id,
             ami_name,
-            normalized_region,
+            region,
             yes=yes,
         )
 
-        instance_capability = _resolve_bench_worker_capability(normalized_instance_type)
+        instance_capability = _resolve_bench_worker_capability(instance_type)
         extra_vars: dict[str, str] = {"GPU_CAPABILITY": instance_capability.value}
         if s3_bucket is not None:
             extra_vars["S3_BUCKET"] = s3_bucket
@@ -496,9 +465,9 @@ class AwsCLI(ProviderCLI):
         tasks = {}
         if benchmark_kind is BenchmarkKind.BOTH:
             launch_task_id_md = _build_task_id(
-                normalized_region,
-                normalized_instance_type,
-                normalized_ami_id,
+                region,
+                instance_type,
+                resolved_ami_id,
                 cloud_init_b64=cloud_init_b64,
             )
             md_task = _build_bench_task_id(
@@ -508,9 +477,9 @@ class AwsCLI(ProviderCLI):
             )
             tasks[launch_task_id_md] = md_task
             launch_task_id_rbfe = _build_task_id(
-                normalized_region,
-                normalized_instance_type,
-                normalized_ami_id,
+                region,
+                instance_type,
+                resolved_ami_id,
                 cloud_init_b64=cloud_init_b64,
             )
             rbfe_task = _build_bench_task_id(
@@ -521,9 +490,9 @@ class AwsCLI(ProviderCLI):
             tasks[launch_task_id_rbfe] = rbfe_task
         else:
             task_id = _build_task_id(
-                normalized_region,
-                normalized_instance_type,
-                normalized_ami_id,
+                region,
+                instance_type,
+                resolved_ami_id,
                 cloud_init_b64=cloud_init_b64,
             )
             bench_task_id = _build_bench_task_id(
@@ -547,7 +516,7 @@ class AwsCLI(ProviderCLI):
                 capability=instance_capability.value,
             )
             print(
-                f"Created benchmark task for instance type '{normalized_instance_type}' with AMI '{normalized_ami_id}' in region '{normalized_region}'."
+                f"Created benchmark task for instance type '{instance_type}' with AMI '{resolved_ami_id}' in region '{region}'."
             )
 
     def _process_launch_task(
