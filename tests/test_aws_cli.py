@@ -108,12 +108,13 @@ def test_launch_processes_task_and_marks_success(monkeypatch):
     config = _FakeConfig(fake_db)
     captured: list[object] = []
 
-    class _FakeProvider:
-        def submit(self, *launch_values):
-            captured.append(launch_values)
-            return "i-1234567890abcdef0"
+    def _fake_launch_ec2_instance(*launch_values, **launch_kwargs):
+        captured.append((launch_values, launch_kwargs))
+        return "i-1234567890abcdef0"
 
-    monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _FakeProvider())
+    monkeypatch.setattr(
+        aws_cli_module, "launch_ec2_instance", _fake_launch_ec2_instance
+    )
     monkeypatch.setenv("EC2_KEY_NAME", "bench-key")
     monkeypatch.setenv("EC2_IAM_INSTANCE_PROFILE", "bench-profile")
 
@@ -122,16 +123,18 @@ def test_launch_processes_task_and_marks_success(monkeypatch):
     assert fake_db.mark_calls == [{"taskid": taskid, "success": True}]
     assert len(captured) == 1
     assert captured[0] == (
-        "g5.xlarge",
-        "ami-0abc123456789def0",
-        "us-east-1",
-        cloud_init_text,
-        "bench-key",
-        "bench-profile",
+        ("g5.xlarge",),
+        {
+            "ami_id": "ami-0abc123456789def0",
+            "region": "us-east-1",
+            "user_data": cloud_init_text,
+            "key_name": "bench-key",
+            "instance_profile_name": "bench-profile",
+        },
     )
 
 
-def test_launch_marks_failed_when_submit_raises(monkeypatch):
+def test_launch_marks_failed_when_ec2_launch_raises(monkeypatch):
     taskid = (
         "us-east-1:g5.xlarge:ami-0abc123456789def0:12345678-1234-5678-1234-567812345678"
     )
@@ -139,11 +142,12 @@ def test_launch_marks_failed_when_submit_raises(monkeypatch):
     fake_db = _FakeTaskDB(checkout_results=[taskid, taskid])
     config = _FakeConfig(fake_db)
 
-    class _BrokenProvider:
-        def submit(self, *_launch_values):
-            raise RuntimeError("boom")
+    def _broken_launch_ec2_instance(*_args, **_kwargs):
+        raise RuntimeError("boom")
 
-    monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _BrokenProvider())
+    monkeypatch.setattr(
+        aws_cli_module, "launch_ec2_instance", _broken_launch_ec2_instance
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         AwsCLI().launch(loop=False, config=config)
@@ -160,18 +164,19 @@ def test_loop_launch_retries_when_ec2_capacity_is_unavailable(monkeypatch, capsy
     submit_calls: list[object] = []
     sleep_calls: list[int] = []
 
-    class _FlakyProvider:
-        def submit(self, *launch_values):
-            submit_calls.append(launch_values)
-            if len(submit_calls) == 1:
-                raise RuntimeError(
-                    "AWS error while launching instance type 'g5.xlarge' with AMI "
-                    "'ami-0abc123456789def0' in region 'us-east-1': "
-                    "InsufficientInstanceCapacity"
-                )
-            return "i-1234567890abcdef0"
+    def _flaky_launch_ec2_instance(*launch_values, **launch_kwargs):
+        submit_calls.append((launch_values, launch_kwargs))
+        if len(submit_calls) == 1:
+            raise RuntimeError(
+                "AWS error while launching instance type 'g5.xlarge' with AMI "
+                "'ami-0abc123456789def0' in region 'us-east-1': "
+                "InsufficientInstanceCapacity"
+            )
+        return "i-1234567890abcdef0"
 
-    monkeypatch.setattr(aws_cli_module, "get_provider", lambda _name: _FlakyProvider())
+    monkeypatch.setattr(
+        aws_cli_module, "launch_ec2_instance", _flaky_launch_ec2_instance
+    )
     monkeypatch.setattr(
         aws_cli_module, "get_instance_type_vcpu_count", lambda _itype: 4
     )

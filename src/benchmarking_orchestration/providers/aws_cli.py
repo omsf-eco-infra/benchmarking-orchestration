@@ -6,7 +6,7 @@ from benchmarking_orchestration.tasks import TaskStatusDB
 import os
 import sys
 from pathlib import Path
-from typing import Any, Annotated, Callable, Optional
+from typing import Annotated, Callable, Optional
 
 from cyclopts import App, Parameter, validators
 
@@ -14,6 +14,7 @@ from ..aws import (
     DEFAULT_LAUNCH_AMI_ENV_VAR,
     get_launch_ami_details,
     validate_launch_instance_type,
+    launch_ec2_instance,
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
     get_instance_type_vcpu_count,
@@ -28,7 +29,6 @@ from ..task_id import (
     _parse_bench_task_metadata,
     _parse_launch_task_id,
 )
-from . import get_provider
 from .cli_protocol import Config, ProviderCLI
 
 CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
@@ -197,7 +197,6 @@ def _is_insufficient_instance_capacity_error(exc: BaseException) -> bool:
 def _submit_loop_launch_task(
     task: str,
     instance_type: str,
-    provider: Any,
     ami_id: str,
     region: str,
     user_data: str | None,
@@ -212,8 +211,6 @@ def _submit_loop_launch_task(
         Launch task identifier currently being processed.
     instance_type : str
         EC2 instance type requested by the launch task.
-    provider : Any
-        Provider implementation used to submit the launch request.
     ami_id : str
         AMI identifier to use.
     region : str
@@ -233,18 +230,18 @@ def _submit_loop_launch_task(
     Raises
     ------
     Exception
-        Re-raises any non-capacity submission error from the provider.
+        Re-raises any non-capacity EC2 launch error.
     """
     while True:
         _wait_for_ondemand_g_vcpu_quota(task, instance_type)
         try:
-            return provider.submit(
+            return launch_ec2_instance(
                 instance_type,
-                ami_id,
-                region,
-                user_data,
-                key_name,
-                instance_profile_name,
+                ami_id=ami_id,
+                region=region,
+                user_data=user_data,
+                key_name=key_name,
+                instance_profile_name=instance_profile_name,
             )
         except Exception as exc:
             if not _is_insufficient_instance_capacity_error(exc):
@@ -566,12 +563,10 @@ class AwsCLI(ProviderCLI):
                 cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
             ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
             instance_profile_name = os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
-            provider = get_provider(self.provider_name)
             instance_id = (
                 _submit_loop_launch_task(
                     task=task,
                     instance_type=task_instance_type,
-                    provider=provider,
                     ami_id=task_ami_id,
                     region=task_region,
                     user_data=cloud_init_user_data,
@@ -579,13 +574,13 @@ class AwsCLI(ProviderCLI):
                     instance_profile_name=instance_profile_name,
                 )
                 if retry_for_capacity
-                else provider.submit(
+                else launch_ec2_instance(
                     task_instance_type,
-                    task_ami_id,
-                    task_region,
-                    cloud_init_user_data,
-                    ec2_key_name,
-                    instance_profile_name,
+                    ami_id=task_ami_id,
+                    region=task_region,
+                    user_data=cloud_init_user_data,
+                    key_name=ec2_key_name,
+                    instance_profile_name=instance_profile_name,
                 )
             )
         except Exception as exc:
