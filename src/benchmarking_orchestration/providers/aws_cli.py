@@ -12,8 +12,7 @@ from cyclopts import App, Parameter, validators
 
 from ..aws import (
     DEFAULT_LAUNCH_AMI_ENV_VAR,
-    get_launch_ami_name,
-    validate_launch_ami,
+    get_launch_ami_details,
     validate_launch_instance_type,
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
@@ -472,8 +471,12 @@ class AwsCLI(ProviderCLI):
             raise ValueError("mps_process_count must be greater than or equal to 1.")
 
         validate_launch_instance_type(normalized_instance_type, normalized_region)
-        validate_launch_ami(normalized_ami_id, normalized_region)
-        ami_name = get_launch_ami_name(normalized_ami_id, normalized_region)
+        ami_details = get_launch_ami_details(normalized_ami_id, normalized_region)
+        ami_name = str(
+            ami_details.get("Name")
+            or ami_details.get("Description")
+            or ami_details.get("ImageId")
+        )
         _confirm_ami_choice(
             normalized_ami_id,
             ami_name,
@@ -547,7 +550,71 @@ class AwsCLI(ProviderCLI):
                 f"Created benchmark task for instance type '{normalized_instance_type}' with AMI '{normalized_ami_id}' in region '{normalized_region}'."
             )
 
-    def _loop_launch(self, task_db: TaskStatusDB):
+    def _process_launch_task(
+        self,
+        task_db: TaskStatusDB,
+        task: str,
+        *,
+        retry_for_capacity: bool,
+    ) -> None:
+        """Process one checked-out AWS launch task.
+
+        Parameters
+        ----------
+        task_db : TaskStatusDB
+            Database used to record task completion.
+        task : str
+            Checked-out launch task identifier.
+        retry_for_capacity : bool
+            Whether to wait for quota and retry EC2 capacity errors.
+        """
+        try:
+            task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
+                _parse_launch_task_id(task)
+            )
+            _validate_launch_task_ami_against_expected(task_ami_id)
+            cloud_init_user_data = None
+            if cloud_init_b64 is not None:
+                cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
+            ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
+            instance_profile_name = os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
+            provider = get_provider(self.provider_name)
+            launch_spec = LaunchSpec(
+                instance_type=task_instance_type,
+                region=task_region,
+                ami_id=task_ami_id,
+                user_data=cloud_init_user_data,
+                key_name=ec2_key_name,
+                instance_profile_name=instance_profile_name,
+            )
+            instance_id = (
+                _submit_loop_launch_spec(
+                    task=task,
+                    instance_type=task_instance_type,
+                    provider=provider,
+                    launch_spec=launch_spec,
+                )
+                if retry_for_capacity
+                else provider.submit(launch_spec)
+            )
+        except Exception as exc:
+            task_db.mark_task_completed(task, success=False)
+            raise exc
+
+        task_db.mark_task_completed(task, success=True)
+        print(
+            f"Processed launch task '{task}' with instance '{instance_id}'.",
+            flush=retry_for_capacity,
+        )
+
+    def _loop_launch(self, task_db: TaskStatusDB) -> None:
+        """Process all available AWS launch tasks with capacity retries.
+
+        Parameters
+        ----------
+        task_db : TaskStatusDB
+            Database from which launch tasks are checked out.
+        """
         while True:
             try:
                 task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
@@ -557,45 +624,7 @@ class AwsCLI(ProviderCLI):
                 ) from exc
             if task is None:
                 break
-            try:
-                task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
-                    _parse_launch_task_id(task)
-                )
-                _validate_launch_task_ami_against_expected(task_ami_id)
-                cloud_init_user_data = None
-                if cloud_init_b64 is not None:
-                    cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
-                ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
-                instance_profile_name = (
-                    os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
-                )
-                provider = get_provider(self.provider_name)
-                launch_spec = LaunchSpec(
-                    instance_type=task_instance_type,
-                    region=task_region,
-                    ami_id=task_ami_id,
-                    user_data=cloud_init_user_data,
-                    key_name=ec2_key_name,
-                    instance_profile_name=instance_profile_name,
-                )
-                instance_id = _submit_loop_launch_spec(
-                    task=task,
-                    instance_type=task_instance_type,
-                    provider=provider,
-                    launch_spec=launch_spec,
-                )
-            except Exception as exc:
-                task_db.mark_task_completed(task, success=False)
-                raise exc
-            try:
-                task_db.mark_task_completed(task, success=True)
-            except Exception as exc:
-                raise exc
-
-            print(
-                f"Processed launch task '{task}' with instance '{instance_id}'.",
-                flush=True,
-            )
+            self._process_launch_task(task_db, task, retry_for_capacity=True)
 
     def launch(self, loop: bool, *, config: Config | None = None):
         """
@@ -625,36 +654,4 @@ class AwsCLI(ProviderCLI):
             if task is None:
                 print("No available launch tasks")
                 return
-            try:
-                task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
-                    _parse_launch_task_id(task)
-                )
-                _validate_launch_task_ami_against_expected(task_ami_id)
-                cloud_init_user_data = None
-                if cloud_init_b64 is not None:
-                    cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
-                ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
-                instance_profile_name = (
-                    os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
-                )
-                provider = get_provider(self.provider_name)
-                instance_id = provider.submit(
-                    LaunchSpec(
-                        instance_type=task_instance_type,
-                        region=task_region,
-                        ami_id=task_ami_id,
-                        user_data=cloud_init_user_data,
-                        key_name=ec2_key_name,
-                        instance_profile_name=instance_profile_name,
-                    )
-                )
-            except Exception as exc:
-                task_db.mark_task_completed(task, success=False)
-                raise exc
-
-            try:
-                task_db.mark_task_completed(task, success=True)
-            except Exception as exc:
-                raise exc
-
-            print(f"Processed launch task '{task}' with instance '{instance_id}'.")
+            self._process_launch_task(task_db, task, retry_for_capacity=False)

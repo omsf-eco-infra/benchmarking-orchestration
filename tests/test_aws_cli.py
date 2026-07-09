@@ -264,7 +264,7 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     fake_db = _FakeTaskDB()
     config = _FakeConfig(fake_db)
     instance_validation_calls: list[dict[str, str]] = []
-    ami_validation_calls: list[dict[str, str]] = []
+    ami_details_calls: list[dict[str, str]] = []
     cloud_init_calls: list[dict[str, object]] = []
     bench_task_calls: list[dict[str, object]] = []
 
@@ -280,18 +280,11 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         aws_cli_module,
-        "validate_launch_ami",
-        lambda ami_id, region: ami_validation_calls.append(
-            {
-                "ami_id": ami_id,
-                "region": region,
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        aws_cli_module,
-        "get_launch_ami_name",
-        lambda ami_id, region: f"approved-{ami_id}-{region}",
+        "get_launch_ami_details",
+        lambda ami_id, region: ami_details_calls.append(
+            {"ami_id": ami_id, "region": region}
+        )
+        or {"Name": f"approved-{ami_id}-{region}"},
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -350,7 +343,7 @@ def test_create_adds_launch_and_bench_tasks(monkeypatch, capsys):
             "region": "us-east-1",
         }
     ]
-    assert ami_validation_calls == [
+    assert ami_details_calls == [
         {
             "ami_id": "ami-0abc123456789def0",
             "region": "us-east-1",
@@ -403,13 +396,8 @@ def test_create_benchmark_task_uses_requested_mps_process_count(monkeypatch):
     )
     monkeypatch.setattr(
         aws_cli_module,
-        "validate_launch_ami",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        aws_cli_module,
-        "get_launch_ami_name",
-        lambda ami_id, region: f"approved-{ami_id}-{region}",
+        "get_launch_ami_details",
+        lambda *_args, **_kwargs: {"Name": "approved-ami"},
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -470,13 +458,8 @@ def test_create_both_tasks_use_requested_mps_process_count(monkeypatch):
     )
     monkeypatch.setattr(
         aws_cli_module,
-        "validate_launch_ami",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        aws_cli_module,
-        "get_launch_ami_name",
-        lambda ami_id, region: f"approved-{ami_id}-{region}",
+        "get_launch_ami_details",
+        lambda *_args, **_kwargs: {"Name": "approved-ami"},
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -551,7 +534,7 @@ def test_create_requires_explicit_or_configured_ami_id(monkeypatch):
 def test_create_uses_approved_ami_from_environment(monkeypatch):
     fake_db = _FakeTaskDB()
     config = _FakeConfig(fake_db)
-    ami_validation_calls: list[dict[str, str]] = []
+    ami_details_calls: list[dict[str, str]] = []
 
     monkeypatch.setenv("AWS_BENCHMARK_AMI_ID", "AMI-0ABC123456789DEF0")
     monkeypatch.setattr(
@@ -561,15 +544,11 @@ def test_create_uses_approved_ami_from_environment(monkeypatch):
     )
     monkeypatch.setattr(
         aws_cli_module,
-        "validate_launch_ami",
-        lambda ami_id, region: ami_validation_calls.append(
+        "get_launch_ami_details",
+        lambda ami_id, region: ami_details_calls.append(
             {"ami_id": ami_id, "region": region}
-        ),
-    )
-    monkeypatch.setattr(
-        aws_cli_module,
-        "get_launch_ami_name",
-        lambda ami_id, region: f"approved-{ami_id}-{region}",
+        )
+        or {"Name": f"approved-{ami_id}-{region}"},
     )
     monkeypatch.setattr(
         aws_cli_module,
@@ -596,7 +575,7 @@ def test_create_uses_approved_ami_from_environment(monkeypatch):
         config=config,
     )
 
-    assert ami_validation_calls == [
+    assert ami_details_calls == [
         {"ami_id": "ami-0abc123456789def0", "region": "us-east-1"}
     ]
 
