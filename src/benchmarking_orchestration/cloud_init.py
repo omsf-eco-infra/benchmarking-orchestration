@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-import os
+from collections.abc import Mapping
 from pathlib import Path
 from string import Template
 
@@ -65,42 +65,35 @@ def _fill_cloud_init_template(cloud_init_file: Path, **kwargs) -> str:
 
 
 def _read_cloud_init_file_as_base64(
-    cloud_init_file: str | None,
-    extra_vars: dict[str, str] | None = None,
+    cloud_init_file: str | Path | None,
+    template_values: Mapping[str, str] | None = None,
 ) -> str | None:
-    """Read a cloud-init file and return a base64 payload.
+    """Render a cloud-init file with explicit values and return base64.
 
     Parameters
     ----------
-    cloud_init_file : str, optional
-        Path to a cloud-init file.
-    extra_vars : dict, optional
-        Additional template variable overrides merged on top of the
-        environment-variable defaults (e.g. ``{"GPU_CAPABILITY": "g4-dn"}``).
+    cloud_init_file : str | Path | None
+        Path to a cloud-init template, or ``None``.
+    template_values : Mapping[str, str] | None, optional
+        Explicit template placeholder values.
 
     Returns
     -------
     str | None
-        Base64-encoded file contents when provided, otherwise ``None``.
+        Base64-encoded rendered contents, or ``None`` when no path is supplied.
 
     Raises
     ------
     ValueError
-        If file reading fails or the file is empty.
+        If file reading, rendering, or encoding fails, or the file is empty.
     """
     if cloud_init_file is None:
         return None
 
     file_path = Path(cloud_init_file)
-    template_values = dict(os.environ)
-    if "TURSO_DATABASE_URL" in template_values:
-        template_values["turso_database_url"] = template_values["TURSO_DATABASE_URL"]
-    if "TURSO_AUTH_TOKEN" in template_values:
-        template_values["turso_auth_token"] = template_values["TURSO_AUTH_TOKEN"]
-    if extra_vars:
-        template_values.update(extra_vars)
-
-    rendered_cloud_init = _fill_cloud_init_template(file_path, **template_values)
+    rendered_cloud_init = _fill_cloud_init_template(
+        file_path, **dict(template_values or {})
+    )
     file_bytes = rendered_cloud_init.encode("utf-8")
 
     if not file_bytes:

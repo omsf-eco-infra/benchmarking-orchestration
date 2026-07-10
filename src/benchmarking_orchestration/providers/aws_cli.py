@@ -1,7 +1,4 @@
 from __future__ import annotations
-import time
-from exorcist.taskdb import _logger
-from benchmarking_orchestration.tasks import TaskStatusDB
 
 import os
 import sys
@@ -10,29 +7,16 @@ from typing import Annotated, Callable, Optional
 
 from cyclopts import App, Parameter, validators
 
-from ..aws import (
-    DEFAULT_LAUNCH_AMI_ENV_VAR,
-    get_launch_ami_details,
-    validate_launch_instance_type,
-    launch_ec2_instance,
-    get_ondemand_g_vcpu_quota,
-    get_ondemand_g_vcpus_used,
-    get_instance_type_vcpu_count,
+from ..aws import DEFAULT_LAUNCH_AMI_ENV_VAR, get_launch_ami_details
+from ..aws.orchestration import (
+    process_aws_benchmark_task,
+    process_aws_launch_task,
+    queue_aws_tasks,
 )
-from ..bench import run_benchmark
 from ..benchmark_kind import BenchmarkKind
-from ..capabilities import WorkerCapability, _resolve_bench_worker_capability
-from ..cloud_init import _decode_cloud_init_base64, _read_cloud_init_file_as_base64
-from ..task_id import (
-    _build_bench_task_id,
-    _build_task_id,
-    _parse_bench_task_metadata,
-    _parse_launch_task_id,
-)
+from ..capabilities import WorkerCapability
+from ..task_id import _parse_bench_task_metadata
 from .cli_protocol import Config, ProviderCLI
-
-CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
-WIGGLE_ROOM = 8
 
 
 def _resolve_required_ami_id(ami_id: str | None) -> str:
@@ -41,24 +25,22 @@ def _resolve_required_ami_id(ami_id: str | None) -> str:
     Parameters
     ----------
     ami_id : str | None
-        Explicit AMI identifier argument, or ``None`` to fall back to the
-        approved environment variable.
+        Explicit AMI identifier, or ``None`` to use the approved environment
+        variable.
 
     Returns
     -------
     str
-        AMI identifier.
+        Normalized AMI identifier.
 
     Raises
     ------
     ValueError
-        If no AMI identifier is provided explicitly or via the approved
-        environment variable.
+        If no non-empty AMI identifier is configured.
     """
     candidate_ami_id = ami_id
     if candidate_ami_id is None:
         candidate_ami_id = os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
-
     if candidate_ami_id is None:
         raise ValueError(
             f"AMI ID is required. Pass --ami-id or set {DEFAULT_LAUNCH_AMI_ENV_VAR}."
@@ -67,7 +49,6 @@ def _resolve_required_ami_id(ami_id: str | None) -> str:
     normalized_ami_id = candidate_ami_id.strip().lower()
     if not normalized_ami_id:
         raise ValueError("ami id cannot be empty.")
-
     return normalized_ami_id
 
 
@@ -84,25 +65,24 @@ def _confirm_ami_choice(
     Parameters
     ----------
     ami_id : str
-        AMI identifier selected for queueing.
+        Selected AMI identifier.
     ami_name : str
-        Human-readable AMI name returned by AWS.
+        Human-readable AMI name.
     region : str
-        AWS region where the AMI will be used.
+        AWS region in which the AMI is used.
     yes : bool, default=False
-        When ``True``, skip the interactive confirmation prompt.
+        Whether to skip interactive confirmation.
     input_func : Callable[[str], str], default=input
-        Input function used to prompt for confirmation.
+        Input function used for confirmation.
 
     Raises
     ------
     ValueError
-        If the AMI selection is not confirmed.
+        If interactive confirmation is unavailable or declined.
     """
     print(
         f"Resolved AMI for AWS queueing: '{ami_name}' ({ami_id}) in region '{region}'."
     )
-
     if yes:
         print("AMI confirmation skipped because --yes was provided.")
         return
@@ -113,149 +93,26 @@ def _confirm_ami_choice(
             "Refusing to queue AWS tasks without interactive AMI confirmation. "
             f"Re-run with --yes after verifying AMI '{ami_name}' ({ami_id})."
         )
-
-    response = input_func(prompt).strip().lower()
-    if response not in {"y", "yes"}:
+    if input_func(prompt).strip().lower() not in {"y", "yes"}:
         raise ValueError(
             f"Aborted AWS task creation because AMI '{ami_name}' ({ami_id}) was not confirmed."
         )
 
 
-def _validate_launch_task_ami_against_expected(task_ami_id: str) -> None:
-    """Validate a queued launch task AMI against the approved AMI setting.
-
-    Parameters
-    ----------
-    task_ami_id : str
-        AMI identifier embedded in the queued launch task.
-
-    Raises
-    ------
-    RuntimeError
-        If an approved AMI is configured and the queued task AMI does not match it.
-    """
-    configured_ami_id = os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR)
-    if configured_ami_id is None:
-        return
-
-    if task_ami_id != configured_ami_id.strip().lower():
-        raise RuntimeError(
-            "Queued launch task AMI does not match the approved AMI. "
-            f"Task AMI: '{task_ami_id}'. Approved AMI from "
-            f"{DEFAULT_LAUNCH_AMI_ENV_VAR}: '{configured_ami_id}'."
-        )
-
-
-def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
-    """Wait until On-Demand G/VT quota can accommodate an instance launch.
-
-    Parameters
-    ----------
-    task : str
-        Launch task identifier currently being processed.
-    instance_type : str
-        EC2 instance type requested by the launch task.
-    """
-    needed_vcpus = get_instance_type_vcpu_count(instance_type)
-    quota = get_ondemand_g_vcpu_quota()
-    used = get_ondemand_g_vcpus_used()
-    available = max(quota - used - WIGGLE_ROOM, 0)
-    if needed_vcpus <= available:
-        return
-
-    _logger.warning(
-        f"Insufficient vCPU quota to launch '{task}': "
-        f"needed={needed_vcpus}, available={available} "
-        f"(quota={quota}, used={used}). Waiting for capacity..."
-    )
-    while needed_vcpus > available:
-        time.sleep(CAPACITY_RETRY_SLEEP_SECONDS)
-        quota = get_ondemand_g_vcpu_quota()
-        used = get_ondemand_g_vcpus_used()
-        available = max(quota - used - WIGGLE_ROOM, 0)
-
-
-def _is_insufficient_instance_capacity_error(exc: BaseException) -> bool:
-    """Return whether an exception represents EC2 placement capacity exhaustion.
-
-    Parameters
-    ----------
-    exc : BaseException
-        Exception raised during EC2 launch submission.
+def _cloud_init_template_values() -> dict[str, str]:
+    """Build explicit cloud-init values from the CLI environment.
 
     Returns
     -------
-    bool
-        ``True`` when the error indicates ``InsufficientInstanceCapacity``,
-        otherwise ``False``.
+    dict[str, str]
+        Environment values plus backward-compatible lowercase Turso aliases.
     """
-    if "InsufficientInstanceCapacity" in str(exc):
-        return True
-
-    cause = getattr(exc, "__cause__", None)
-    response = getattr(cause, "response", {}) if cause is not None else {}
-    error = response.get("Error", {}) if isinstance(response, dict) else {}
-    return error.get("Code") == "InsufficientInstanceCapacity"
-
-
-def _submit_loop_launch_task(
-    task: str,
-    instance_type: str,
-    ami_id: str,
-    region: str,
-    user_data: str | None,
-    key_name: str | None,
-    instance_profile_name: str | None,
-) -> str:
-    """Submit a looped AWS launch task with quota waits and capacity retries.
-
-    Parameters
-    ----------
-    task : str
-        Launch task identifier currently being processed.
-    instance_type : str
-        EC2 instance type requested by the launch task.
-    ami_id : str
-        AMI identifier to use.
-    region : str
-        AWS region where the instance is launched.
-    user_data : str | None
-        Optional startup payload for the instance.
-    key_name : str | None
-        Optional EC2 SSH key pair name.
-    instance_profile_name : str | None
-        Optional IAM instance profile name.
-
-    Returns
-    -------
-    str
-        Launched EC2 instance identifier.
-
-    Raises
-    ------
-    Exception
-        Re-raises any non-capacity EC2 launch error.
-    """
-    while True:
-        _wait_for_ondemand_g_vcpu_quota(task, instance_type)
-        try:
-            return launch_ec2_instance(
-                instance_type,
-                ami_id=ami_id,
-                region=region,
-                user_data=user_data,
-                key_name=key_name,
-                instance_profile_name=instance_profile_name,
-            )
-        except Exception as exc:
-            if not _is_insufficient_instance_capacity_error(exc):
-                raise
-            _logger.warning(
-                f"Insufficient EC2 instance capacity while launching '{task}'. "
-                f"Retrying in {CAPACITY_RETRY_SLEEP_SECONDS} seconds. "
-                f"Original error: {exc}"
-            )
-            time.sleep(CAPACITY_RETRY_SLEEP_SECONDS)
+    values = dict(os.environ)
+    if "TURSO_DATABASE_URL" in values:
+        values["turso_database_url"] = values["TURSO_DATABASE_URL"]
+    if "TURSO_AUTH_TOKEN" in values:
+        values["turso_auth_token"] = values["TURSO_AUTH_TOKEN"]
+    return values
 
 
 class AwsCLI(ProviderCLI):
@@ -263,22 +120,17 @@ class AwsCLI(ProviderCLI):
 
     provider_name: str = "aws"
 
-    def register_cli(
-        self,
-        create_app: App,
-        launch_app: App,
-        worker_app: App,
-    ) -> None:
+    def register_cli(self, create_app: App, launch_app: App, worker_app: App) -> None:
         """Register AWS subcommands under Cyclopts provider groups.
 
         Parameters
         ----------
         create_app : App
-            Cyclopts ``create`` command group.
+            Cyclopts create command group.
         launch_app : App
-            Cyclopts ``launch`` command group.
+            Cyclopts launch command group.
         worker_app : App
-            Cyclopts ``worker`` command group.
+            Cyclopts worker command group.
         """
         create_app.command(self.create, name=self.provider_name)
         worker_app.command(self.worker, name=self.provider_name)
@@ -292,94 +144,61 @@ class AwsCLI(ProviderCLI):
             Parameter(
                 env_var="BENCHMARK_REPO_PATH",
                 show_env_var=True,
-                validator=validators.Path(
-                    file_okay=False,
-                    dir_okay=True,
-                ),
+                validator=validators.Path(file_okay=False, dir_okay=True),
             ),
         ] = Path("/opt/dlami/nvme/performance_benchmarks"),
         *,
         config: Config | None = None,
-    ):
-        """Run an aws worker with a selected capability.
+    ) -> None:
+        """Run an AWS worker with a selected capability.
 
         Parameters
         ----------
         capability : WorkerCapability
-            Worker capability used to select which tasks to process.
-        db_path : str
-            Optional filesystem path to the task status database.
+            Capability used to select tasks.
         bench_repo_path : Path
-            Path to the cloned ``performance_benchmarks`` repository.
+            Path to the benchmark repository.
+        config : Config | None, optional
+            CLI database configuration.
         """
-        if config is None:
-            config = Config()
+        config = config or Config()
         task_db = config.task_db
+        if capability is WorkerCapability.LAUNCH:
+            self.launch(False, config=config)
+            return
 
-        match capability:
-            case WorkerCapability.LAUNCH:
-                # launch
-                # aws_launch(db_path)
-                # TODO:
-                self.launch(config=config)
-                return
-            case _:
-                task = task_db.check_out_task_with_capability(capability.value)
+        task = task_db.check_out_task_with_capability(capability.value)
+        if task is None:
+            print(f"No available {capability.value} tasks.")
+            return
 
-                if task is None:
-                    print(f"No available {capability.value} tasks.")
-                    return
-                # Run the benchmark workload then report results.
-                try:
-                    benchmark_kind, mps_process_count, _launch_task_id = (
-                        _parse_bench_task_metadata(task)
-                    )
-                except ValueError as exc:
-                    task_db.mark_task_completed(task, success=False)
-                    raise exc
+        try:
+            _parse_bench_task_metadata(task)
+        except ValueError:
+            task_db.mark_task_completed(task, success=False)
+            raise
 
-                s3_bucket = os.environ.get("S3_BUCKET")
-                if not s3_bucket:
-                    try:
-                        task_db.mark_task_completed(task, success=False)
-                    except Exception:
-                        pass
-                    raise ValueError(
-                        "S3_BUCKET environment variable is required for bench tasks."
-                    )
+        s3_bucket = os.environ.get("S3_BUCKET")
+        if not s3_bucket:
+            try:
+                task_db.mark_task_completed(task, success=False)
+            except Exception:
+                pass
+            raise ValueError(
+                "S3_BUCKET environment variable is required for bench tasks."
+            )
 
-                assert bench_repo_path
-                try:
-                    # TODO: We need to abstract this away
-                    run_benchmark(
-                        benchmark_repo_path=bench_repo_path,
-                        s3_bucket=s3_bucket,
-                        task_id=task,
-                        benchmark_kind=benchmark_kind,
-                        mps_process_count=mps_process_count,
-                    )
-                except Exception as exc:
-                    try:
-                        task_db.mark_task_completed(task, success=False)
-                    except Exception as mark_exc:
-                        raise ValueError(
-                            f"Bench task '{task}' failed and could not be marked as failed "
-                            f"in database '{task_db}': {mark_exc}. Original error: {exc}"
-                        ) from exc
-                    raise ValueError(f"Bench task '{task}' failed: {exc}") from exc
-
-                try:
-                    task_db.mark_task_completed(task, success=True)
-                except Exception as exc:
-                    raise ValueError(
-                        f"Bench task '{task}' completed but could not be marked as succeeded "
-                        f"in database '{task_db}': {exc}"
-                    ) from exc
-
-                print(
-                    f"Processed bench task '{task}' (kind '{benchmark_kind.value}') "
-                    f"with capability '{capability.value}'."
-                )
+        assert bench_repo_path is not None
+        processed_task, benchmark_kind = process_aws_benchmark_task(
+            task_db,
+            task,
+            benchmark_repo_path=bench_repo_path,
+            s3_bucket=s3_bucket,
+        )
+        print(
+            f"Processed bench task '{processed_task}' (kind '{benchmark_kind.value}') "
+            f"with capability '{capability.value}'."
+        )
 
     def create(
         self,
@@ -387,18 +206,10 @@ class AwsCLI(ProviderCLI):
         region: str = "us-east-1",
         ami_id: Annotated[
             Optional[str],
-            Parameter(
-                env_var=DEFAULT_LAUNCH_AMI_ENV_VAR,
-                show_env_var=True,
-            ),
+            Parameter(env_var=DEFAULT_LAUNCH_AMI_ENV_VAR, show_env_var=True),
         ] = None,
         cloud_init_file: Annotated[
-            Optional[Path],
-            Parameter(
-                validator=validators.Path(
-                    exists=True,
-                )
-            ),
+            Optional[Path], Parameter(validator=validators.Path(exists=True))
         ] = None,
         benchmark_kind: BenchmarkKind = BenchmarkKind.BOTH,
         mps_process_count: int = 1,
@@ -410,199 +221,104 @@ class AwsCLI(ProviderCLI):
             Parameter(
                 env_var="BENCHMARK_REPO_PATH",
                 show_env_var=True,
-                validator=validators.Path(
-                    file_okay=False,
-                    dir_okay=True,
-                ),
+                validator=validators.Path(file_okay=False, dir_okay=True),
             ),
         ] = Path("/opt/dlami/nvme/performance_benchmarks"),
         yes: bool = False,
         *,
         config: Config | None = None,
     ) -> None:
-        """Create launch and benchmark task entries in TaskStatusDB for AWS.
+        """Create AWS launch and benchmark tasks.
 
         Parameters
         ----------
         instance_type : str
-            Requested EC2 instance type to validate and schedule.
-        region : str
-            AWS region used for instance-type validation and task identity.
-        ami_id : str, optional
-            AMI identifier recorded with task launch metadata. When omitted,
-            the CLI falls back to the approved ``AWS_BENCHMARK_AMI_ID``
-            environment variable.
-        cloud_init_file : str, optional
-            Cloud-init file path to encode and store with task launch metadata.
-        db_path : str | None
-            Filesystem path to the task status database.
-        benchmark_kind : BenchmarkKind
-            Benchmark workload kind for the dependent bench task.
+            Requested EC2 instance type.
+        region : str, default="us-east-1"
+            AWS region.
+        ami_id : str | None, optional
+            AMI identifier, falling back to ``AWS_BENCHMARK_AMI_ID``.
+        cloud_init_file : Path | None, optional
+            Cloud-init template path.
+        benchmark_kind : BenchmarkKind, default=BenchmarkKind.BOTH
+            Benchmark workload selection.
         mps_process_count : int, default=1
-            Number of concurrent benchmark subprocesses to encode for bench tasks.
-            A value of ``1`` preserves current single-process behavior.
-        s3_bucket : str, optional
-            S3 bucket name injected into the cloud-init template as ``S3_BUCKET``.
-            Falls back to the ``BENCHMARK_S3_BUCKET`` environment variable.
-        bench_repo_path : Path, optional
-            Path to the benchmark repository. Preserved for CLI compatibility.
+            Number of benchmark subprocesses.
+        s3_bucket : str | None, optional
+            S3 bucket injected into cloud-init.
+        bench_repo_path : Path | None, optional
+            Preserved CLI compatibility argument.
         yes : bool, default=False
-            Skip the interactive AMI confirmation prompt after the resolved AMI
-            name has been displayed.
+            Whether to skip interactive AMI confirmation.
+        config : Config | None, optional
+            CLI database configuration.
         """
-        if config is None:
-            config = Config()
-        task_db = config.task_db
-
-        instance_type = instance_type.strip().lower()
-        region = region.strip()
-        if not region:
+        del bench_repo_path
+        config = config or Config()
+        normalized_region = region.strip()
+        if not normalized_region:
             raise ValueError("region cannot be empty.")
         resolved_ami_id = _resolve_required_ami_id(ami_id)
-
-        if mps_process_count < 1:
-            raise ValueError("mps_process_count must be greater than or equal to 1.")
-
-        validate_launch_instance_type(instance_type, region)
-        ami_details = get_launch_ami_details(resolved_ami_id, region)
+        ami_details = get_launch_ami_details(resolved_ami_id, normalized_region)
         ami_name = str(
             ami_details.get("Name")
             or ami_details.get("Description")
             or ami_details.get("ImageId")
         )
-        _confirm_ami_choice(
-            resolved_ami_id,
-            ami_name,
-            region,
-            yes=yes,
-        )
+        _confirm_ami_choice(resolved_ami_id, ami_name, normalized_region, yes=yes)
 
-        instance_capability = _resolve_bench_worker_capability(instance_type)
-        extra_vars: dict[str, str] = {"GPU_CAPABILITY": instance_capability.value}
+        template_values = _cloud_init_template_values()
         if s3_bucket is not None:
-            extra_vars["S3_BUCKET"] = s3_bucket
-        cloud_init_b64 = _read_cloud_init_file_as_base64(
-            str(cloud_init_file),
-            extra_vars=extra_vars,
+            template_values["S3_BUCKET"] = s3_bucket
+        task_pairs = queue_aws_tasks(
+            config.task_db,
+            instance_type,
+            normalized_region,
+            resolved_ami_id,
+            benchmark_kind,
+            mps_process_count,
+            cloud_init_file=cloud_init_file,
+            cloud_init_template_values=template_values,
         )
-
-        tasks = {}
-        if benchmark_kind is BenchmarkKind.BOTH:
-            launch_task_id_md = _build_task_id(
-                region,
-                instance_type,
-                resolved_ami_id,
-                cloud_init_b64=cloud_init_b64,
-            )
-            md_task = _build_bench_task_id(
-                launch_task_id_md,
-                BenchmarkKind.MD,
-                mps_process_count=mps_process_count,
-            )
-            tasks[launch_task_id_md] = md_task
-            launch_task_id_rbfe = _build_task_id(
-                region,
-                instance_type,
-                resolved_ami_id,
-                cloud_init_b64=cloud_init_b64,
-            )
-            rbfe_task = _build_bench_task_id(
-                launch_task_id_rbfe,
-                BenchmarkKind.RBFE,
-                mps_process_count=mps_process_count,
-            )
-            tasks[launch_task_id_rbfe] = rbfe_task
-        else:
-            task_id = _build_task_id(
-                region,
-                instance_type,
-                resolved_ami_id,
-                cloud_init_b64=cloud_init_b64,
-            )
-            bench_task_id = _build_bench_task_id(
-                task_id,
-                benchmark_kind,
-                mps_process_count=mps_process_count,
-            )
-            tasks[task_id] = bench_task_id
-
-        for launch_task, bench_task in tasks.items():
-            task_db.add_task_with_capability(
-                taskid=launch_task,
-                requirements=[],
-                max_tries=1,
-                capability=WorkerCapability.LAUNCH.value,
-            )
-            task_db.add_task_with_capability(
-                taskid=bench_task,
-                requirements=[launch_task],
-                max_tries=1,
-                capability=instance_capability.value,
-            )
+        for _launch_task, _benchmark_task in task_pairs:
             print(
-                f"Created benchmark task for instance type '{instance_type}' with AMI '{resolved_ami_id}' in region '{region}'."
+                f"Created benchmark task for instance type '{instance_type.strip().lower()}' "
+                f"with AMI '{resolved_ami_id}' in region '{normalized_region}'."
             )
 
     def _process_launch_task(
         self,
-        task_db: TaskStatusDB,
+        task_db,
         task: str,
         *,
         retry_for_capacity: bool,
     ) -> None:
-        """Process one checked-out AWS launch task.
+        """Adapt one checked-out launch task to orchestration.
 
         Parameters
         ----------
         task_db : TaskStatusDB
-            Database used to record task completion.
+            Database used to record completion.
         task : str
             Checked-out launch task identifier.
         retry_for_capacity : bool
-            Whether to wait for quota and retry EC2 capacity errors.
+            Whether to retry quota and capacity exhaustion.
         """
-        try:
-            task_region, task_instance_type, task_ami_id, cloud_init_b64 = (
-                _parse_launch_task_id(task)
-            )
-            _validate_launch_task_ami_against_expected(task_ami_id)
-            cloud_init_user_data = None
-            if cloud_init_b64 is not None:
-                cloud_init_user_data = _decode_cloud_init_base64(cloud_init_b64)
-            ec2_key_name = os.environ.get("EC2_KEY_NAME") or None
-            instance_profile_name = os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None
-            instance_id = (
-                _submit_loop_launch_task(
-                    task=task,
-                    instance_type=task_instance_type,
-                    ami_id=task_ami_id,
-                    region=task_region,
-                    user_data=cloud_init_user_data,
-                    key_name=ec2_key_name,
-                    instance_profile_name=instance_profile_name,
-                )
-                if retry_for_capacity
-                else launch_ec2_instance(
-                    task_instance_type,
-                    ami_id=task_ami_id,
-                    region=task_region,
-                    user_data=cloud_init_user_data,
-                    key_name=ec2_key_name,
-                    instance_profile_name=instance_profile_name,
-                )
-            )
-        except Exception as exc:
-            task_db.mark_task_completed(task, success=False)
-            raise exc
-
-        task_db.mark_task_completed(task, success=True)
+        instance_id = process_aws_launch_task(
+            task_db,
+            task,
+            expected_ami_id=os.environ.get(DEFAULT_LAUNCH_AMI_ENV_VAR),
+            key_name=os.environ.get("EC2_KEY_NAME") or None,
+            instance_profile_name=os.environ.get("EC2_IAM_INSTANCE_PROFILE") or None,
+            retry_for_capacity=retry_for_capacity,
+        )
         print(
             f"Processed launch task '{task}' with instance '{instance_id}'.",
             flush=retry_for_capacity,
         )
 
-    def _loop_launch(self, task_db: TaskStatusDB) -> None:
-        """Process all available AWS launch tasks with capacity retries.
+    def _loop_launch(self, task_db) -> None:
+        """Process all currently available AWS launch tasks.
 
         Parameters
         ----------
@@ -610,42 +326,50 @@ class AwsCLI(ProviderCLI):
             Database from which launch tasks are checked out.
         """
         while True:
-            try:
-                task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Unable to check out task from database '{task_db}': {exc}"
-                ) from exc
+            task = self._check_out_launch_task(task_db)
             if task is None:
-                break
+                return
             self._process_launch_task(task_db, task, retry_for_capacity=True)
 
-    def launch(self, loop: bool, *, config: Config | None = None):
-        """
-        Launch an EC2 instance based on a task from the task status database.
+    @staticmethod
+    def _check_out_launch_task(task_db) -> str | None:
+        """Check out one launch task with translated database errors.
 
         Parameters
         ----------
-        loop: bool
-            Whether or not to keep looping until the DB is completed
-        config : Config | None, optional
-            Configuration object containing the task status database path. If None, a default
-            Config object is used.
-        """
-        if config is None:
-            config = Config()
-        task_db = config.task_db
+        task_db : TaskStatusDB
+            Database from which a task is checked out.
 
+        Returns
+        -------
+        str | None
+            Checked-out task identifier, or ``None``.
+        """
+        try:
+            return task_db.check_out_task_with_capability(WorkerCapability.LAUNCH.value)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Unable to check out task from database '{task_db}': {exc}"
+            ) from exc
+
+    def launch(self, loop: bool, *, config: Config | None = None) -> None:
+        """Launch EC2 instances from queued launch tasks.
+
+        Parameters
+        ----------
+        loop : bool
+            Whether to process all currently available launch tasks.
+        config : Config | None, optional
+            CLI database configuration.
+        """
+        config = config or Config()
+        task_db = config.task_db
         if loop:
             self._loop_launch(task_db)
-        else:
-            try:
-                task = task_db.check_out_task_with_capability(WorkerCapability.LAUNCH)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Unable to check out task from database '{task_db}': {exc}"
-                ) from exc
-            if task is None:
-                print("No available launch tasks")
-                return
-            self._process_launch_task(task_db, task, retry_for_capacity=False)
+            return
+
+        task = self._check_out_launch_task(task_db)
+        if task is None:
+            print("No available launch tasks")
+            return
+        self._process_launch_task(task_db, task, retry_for_capacity=False)

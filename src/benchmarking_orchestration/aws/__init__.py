@@ -521,3 +521,10 @@ def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None)
 
     running_vcpus = sum(vcpus_by_type[itype] for itype in instance_types)
     return running_vcpus
+
+
+from .orchestration import (  # noqa: E402
+    process_aws_benchmark_task as process_aws_benchmark_task,
+    process_aws_launch_task as process_aws_launch_task,
+    queue_aws_tasks as queue_aws_tasks,
+)
