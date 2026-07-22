@@ -261,7 +261,7 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
         self.benchmark_script_fs = benchmark_script_fs or GithubFileSystem(
             org="OpenFreeEnergy",
             repo="performance_benchmarks",
-            sha="a00ac65ddff5a05b589e3f126b3a65bc79b56f35",
+            sha="be7abff16412cc042a1839ce11c83ec9298efa00",
         )
         self.artifact_output = artifact_output or s3fs.S3FileSystem()
         self.benchmark_root = benchmark_root.rstrip("/")
