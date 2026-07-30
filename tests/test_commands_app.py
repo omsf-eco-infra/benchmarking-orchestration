@@ -11,3 +11,4 @@ def test_create_app_registers_provider_groups_and_aws_commands():
     assert "aws" in list(app["create"])
     assert "aws" in list(app["launch"])
     assert "aws" in list(app["worker"])
+    assert "job" in list(app["worker"])
