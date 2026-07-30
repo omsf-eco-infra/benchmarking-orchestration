@@ -176,6 +176,8 @@ class _FakeTransport:
             Worker PID or framed marker response.
         """
         self.calls.append(("exec", instance_name, command))
+        if command.startswith("mv "):
+            return ""
         if command.startswith("nohup "):
             self.detached_command = command
             return "1234"
@@ -215,31 +217,6 @@ class _FakeTransport:
         self.calls.append(("delete", instance_name))
         self.instance_exists = False
         return instance_name
-
-
-def _benchmark_repo(tmp_path: Path) -> Path:
-    """Create the minimum benchmark input repository.
-
-    Parameters
-    ----------
-    tmp_path : Path
-        Pytest temporary directory.
-
-    Returns
-    -------
-    Path
-        Benchmark repository root.
-    """
-    repository = tmp_path / "benchmark-repo"
-    (repository / "benchmark").mkdir(parents=True)
-    (repository / "benchmark" / "md_benchmark.py").write_text(
-        "# credentialless benchmark input\n", encoding="utf-8"
-    )
-    (repository / "data").mkdir()
-    (repository / "data" / "ross_dodecahedron_jacs.json").write_text(
-        "{}", encoding="utf-8"
-    )
-    return repository
 
 
 def _queued_tasks(tmp_path: Path, *, count: int = 1) -> tuple[TaskStatusDB, list[str]]:
@@ -346,7 +323,6 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
 
     result = launch_brev_task(
         task_db,
-        _benchmark_repo(tmp_path),
         "brev-success-bucket",
         tmp_path / "results",
         _startup_script(tmp_path),
@@ -365,11 +341,13 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
         "benchmark_repo_path": "benchmark-repo",
         "output_directory": "results",
     }
-    assert transport.staged_files == {
-        "benchmark-repo/benchmark/md_benchmark.py",
-        "benchmark-repo/data/ross_dodecahedron_jacs.json",
-        "job.json",
-    }
+    assert transport.staged_files == {"job.json"}
+    assert any(
+        call[0] == "exec"
+        and call[2].startswith("mv /home/ubuntu/workspace/performance_benchmarks ")
+        and call[2].endswith("/benchmark-repo")
+        for call in transport.calls
+    )
     assert "nohup " in transport.detached_command
     assert "< /dev/null & echo $!" in transport.detached_command
     assert "worker job" in transport.detached_command
@@ -469,7 +447,6 @@ def test_launch_persists_and_cleans_up_terminal_failures(
     with pytest.raises(RuntimeError, match=message):
         launch_brev_task(
             task_db,
-            _benchmark_repo(tmp_path),
             "brev-failure-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
@@ -517,7 +494,6 @@ def test_launch_preserves_retrieved_validation_failure(
     with pytest.raises(RuntimeError, match="complete.json job_id"):
         launch_brev_task(
             task_db,
-            _benchmark_repo(tmp_path),
             "brev-validation-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
@@ -557,7 +533,6 @@ def test_launch_preserves_retrieval_failure(
     with pytest.raises(RuntimeError, match="retrieval failed for results"):
         launch_brev_task(
             task_db,
-            _benchmark_repo(tmp_path),
             "brev-retrieval-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
@@ -601,7 +576,6 @@ def test_launch_preserves_upload_failure(
     with pytest.raises(RuntimeError, match="upload failed"):
         launch_brev_task(
             task_db,
-            _benchmark_repo(tmp_path),
             "brev-upload-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
@@ -657,7 +631,6 @@ def test_launch_preserves_success_recording_failure(
     with pytest.raises(RuntimeError, match="task success persistence failed"):
         launch_brev_task(
             task_db,
-            _benchmark_repo(tmp_path),
             "brev-finalization-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
@@ -709,7 +682,6 @@ def test_launch_cleans_up_when_user_interrupts(
     with pytest.raises(KeyboardInterrupt):
         launch_brev_task(
             task_db,
-            _benchmark_repo(tmp_path),
             "brev-interrupt-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),

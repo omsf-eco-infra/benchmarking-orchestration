@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +20,7 @@ from .transport import BrevTransport
 
 _REMOTE_WORKSPACE = "/home/ubuntu/workspace"
 _REMOTE_CLI_PATH = f"{_REMOTE_WORKSPACE}/benchmarking-orchestration"
+_REMOTE_BENCH_REPO_PATH = f"{_REMOTE_WORKSPACE}/performance_benchmarks"
 _REMOTE_JOBS_PATH = f"{_REMOTE_WORKSPACE}/jobs"
 _DEFAULT_INPUT_NAME = "ross_dodecahedron_jacs.json"
 _POLL_INTERVAL_SECONDS = 120
@@ -104,20 +104,17 @@ def _transition(
 
 def _prepare_job_directory(
     staging_root: Path,
-    benchmark_repo_path: Path,
     remote_job_id: str,
     profile: str,
     benchmark_kind: str,
     mps_process_count: int,
 ) -> Path:
-    """Prepare one credentialless worker job and its required inputs.
+    """Prepare one credentialless worker job specification.
 
     Parameters
     ----------
     staging_root : Path
         Temporary controller staging directory.
-    benchmark_repo_path : Path
-        Local performance benchmark repository.
     remote_job_id : str
         Opaque worker job identifier.
     profile : str
@@ -131,25 +128,9 @@ def _prepare_job_directory(
     -------
     Path
         Prepared job directory.
-
-    Raises
-    ------
-    ValueError
-        If required benchmark inputs are absent.
     """
-    benchmark_scripts = benchmark_repo_path / "benchmark"
-    benchmark_input = benchmark_repo_path / "data" / _DEFAULT_INPUT_NAME
-    if not benchmark_scripts.is_dir() or not benchmark_input.is_file():
-        raise ValueError(
-            "benchmark_repo_path must contain 'benchmark/' and "
-            f"'data/{_DEFAULT_INPUT_NAME}'."
-        )
-
     job_directory = staging_root / remote_job_id
-    staged_repo = job_directory / "benchmark-repo"
-    shutil.copytree(benchmark_scripts, staged_repo / "benchmark")
-    (staged_repo / "data").mkdir()
-    shutil.copy2(benchmark_input, staged_repo / "data" / benchmark_input.name)
+    job_directory.mkdir()
     payload = {
         "schema_version": 1,
         "job_id": remote_job_id,
@@ -583,7 +564,6 @@ def _upload_results(
 
 def launch_brev_task(
     task_db: TaskStatusDB,
-    benchmark_repo_path: Path,
     s3_bucket: str,
     result_directory: Path,
     startup_script: Path,
@@ -596,8 +576,6 @@ def launch_brev_task(
     ----------
     task_db : TaskStatusDB
         Trusted controller Exorcist database.
-    benchmark_repo_path : Path
-        Local benchmark repository supplying credentialless worker inputs.
     s3_bucket : str
         Bucket receiving validated benchmark artifacts.
     result_directory : Path
@@ -641,7 +619,6 @@ def launch_brev_task(
         raise
 
     transport = transport or BrevTransport()
-    benchmark_repo_path = benchmark_repo_path.resolve()
     result_directory = result_directory.resolve()
     startup_script = startup_script.resolve()
     local_job_directory = result_directory / remote_job_id
@@ -670,7 +647,6 @@ def launch_brev_task(
         with TemporaryDirectory(prefix="brev-job-") as temporary_directory:
             job_directory = _prepare_job_directory(
                 Path(temporary_directory),
-                benchmark_repo_path,
                 remote_job_id,
                 profile,
                 benchmark_kind.value,
@@ -686,6 +662,11 @@ def launch_brev_task(
             transport.copy(
                 job_directory,
                 f"{instance_name}:{remote_job_directory}",
+            )
+            transport.exec(
+                instance_name,
+                f"mv {shlex.quote(_REMOTE_BENCH_REPO_PATH)} "
+                f"{shlex.quote(f'{remote_job_directory}/benchmark-repo')}",
             )
         _transition(task_db, task, controller_path, controller_state, "staged")
 

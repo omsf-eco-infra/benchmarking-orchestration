@@ -99,8 +99,6 @@ def test_launch_runs_one_controller_task(
     capsys : pytest.CaptureFixture[str]
         Pytest output capture fixture.
     """
-    benchmark_repo = tmp_path / "benchmark-repo"
-    benchmark_repo.mkdir()
     startup_script = tmp_path / "brev_startup.sh"
     startup_script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     result_directory = tmp_path / "results"
@@ -126,7 +124,6 @@ def test_launch_runs_one_controller_task(
     monkeypatch.setattr(brev_cli_module, "launch_brev_task", _launch)
 
     BrevCLI().launch(
-        benchmark_repo,
         "benchmark-results",
         result_directory,
         startup_script,
@@ -136,7 +133,6 @@ def test_launch_runs_one_controller_task(
     assert captured == [
         (
             task_db,
-            benchmark_repo,
             "benchmark-results",
             result_directory,
             startup_script,
