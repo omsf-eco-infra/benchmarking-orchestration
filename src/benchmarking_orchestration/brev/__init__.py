@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..benchmark_kind import BenchmarkKind
 from ..task_id import _build_brev_task_id
 from ..tasks import TaskStatusDB
+from .orchestration import launch_brev_task
 from .transport import BrevTransport
 
 BREV_TASK_CAPABILITY = "brev"
@@ -62,4 +63,9 @@ def queue_brev_tasks(
     return task_ids
 
 
-__all__ = ["BREV_TASK_CAPABILITY", "BrevTransport", "queue_brev_tasks"]
+__all__ = [
+    "BREV_TASK_CAPABILITY",
+    "BrevTransport",
+    "launch_brev_task",
+    "queue_brev_tasks",
+]

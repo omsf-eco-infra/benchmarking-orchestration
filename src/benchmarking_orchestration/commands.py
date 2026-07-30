@@ -18,7 +18,7 @@ def create_app() -> App:
         launch_app=launch_app,
         worker_app=worker_app,
     )
-    BrevCLI().register_cli(create_app)
+    BrevCLI().register_cli(create_app, launch_app)
     worker_app.command(run_job_worker, name="job")
     app.command(create_app)
     app.command(launch_app)
