@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from cyclopts import App
+from pathlib import Path
+from typing import Annotated
+
+from cyclopts import App, Parameter, validators
 
 from ..benchmark_kind import BenchmarkKind
 from ..brev import queue_brev_tasks
+from ..brev.orchestration import launch_brev_task
 from .cli_protocol import Config
 
 
@@ -12,15 +16,18 @@ class BrevCLI:
 
     provider_name = "brev"
 
-    def register_cli(self, create_app: App) -> None:
-        """Register the Brev creation command.
+    def register_cli(self, create_app: App, launch_app: App) -> None:
+        """Register the Brev creation and controller launch commands.
 
         Parameters
         ----------
         create_app : App
             Cyclopts task creation group.
+        launch_app : App
+            Cyclopts trusted-controller launch group.
         """
         create_app.command(self.create, name=self.provider_name)
+        launch_app.command(self.launch, name=self.provider_name)
 
     def create(
         self,
@@ -60,3 +67,45 @@ class BrevCLI:
         )
         for task_id in task_ids:
             print(f"Created Brev benchmark task '{task_id}'.")
+
+    def launch(
+        self,
+        benchmark_repo_path: Annotated[
+            Path,
+            Parameter(validator=validators.Path(file_okay=False, dir_okay=True)),
+        ],
+        result_directory: Path = Path("brev-results"),
+        startup_script: Annotated[
+            Path, Parameter(validator=validators.Path(file_okay=True, dir_okay=False))
+        ] = Path("brev_startup.sh"),
+        *,
+        config: Config | None = None,
+    ) -> None:
+        """Run one queued Brev task from the trusted controller.
+
+        Parameters
+        ----------
+        benchmark_repo_path : Path
+            Local benchmark repository copied as credentialless worker input.
+        result_directory : Path, default=Path("brev-results")
+            Controller directory receiving the local result bundle.
+        startup_script : Path, default=Path("brev_startup.sh")
+            Credentialless Brev instance startup script.
+        config : Config | None, optional
+            Shared Exorcist task database configuration.
+        """
+        config = config or Config()
+        result = launch_brev_task(
+            config.task_db,
+            benchmark_repo_path,
+            result_directory,
+            startup_script,
+        )
+        if result is None:
+            print("No available Brev tasks.")
+            return
+        task, local_job_directory = result
+        print(
+            f"Retrieved Brev task '{task}' to '{local_job_directory}'. "
+            "Task remains in progress until controller upload finalization."
+        )
