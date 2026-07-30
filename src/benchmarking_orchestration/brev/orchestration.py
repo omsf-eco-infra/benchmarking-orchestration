@@ -10,9 +10,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import s3fs
 import sqlalchemy as sqla
 from exorcist.models import TaskStatus
 
+from ..bench import _build_result_s3_prefix
 from ..task_id import _parse_brev_task_metadata
 from ..tasks import TaskStatusDB
 from .transport import BrevTransport
@@ -23,6 +25,7 @@ _REMOTE_JOBS_PATH = f"{_REMOTE_WORKSPACE}/jobs"
 _DEFAULT_INPUT_NAME = "ross_dodecahedron_jacs.json"
 _POLL_INTERVAL_SECONDS = 120
 _HEARTBEAT_INTERVAL_SECONDS = 30
+_RESULT_MANIFEST_SCHEMA_VERSION = 4
 
 
 def _touch_exorcist_task(task_db: TaskStatusDB, task: str) -> None:
@@ -389,14 +392,205 @@ def _poll_remote_job(
         time.sleep(_POLL_INTERVAL_SECONDS)
 
 
+def _validate_retrieved_job(
+    local_job_directory: Path,
+    task: str,
+    remote_job_id: str,
+    instance_name: str,
+    profile: str,
+    benchmark_kind: str,
+    mps_process_count: int,
+) -> datetime:
+    """Validate correlated worker markers, controller state, and artifacts.
+
+    Parameters
+    ----------
+    local_job_directory : Path
+        Retrieved local job directory.
+    task : str
+        Claimed Exorcist task identifier.
+    remote_job_id : str
+        Expected worker job identifier.
+    instance_name : str
+        Expected Brev instance name.
+    profile : str
+        Expected benchmark profile.
+    benchmark_kind : str
+        Expected benchmark workload kind.
+    mps_process_count : int
+        Expected benchmark process count.
+
+    Returns
+    -------
+    datetime
+        Validated benchmark start time used for the S3 date partition.
+
+    Raises
+    ------
+    RuntimeError
+        If any retrieved marker or artifact contract is invalid.
+    """
+    complete = json.loads(
+        (local_job_directory / "complete.json").read_text(encoding="utf-8")
+    )
+    status = json.loads(
+        (local_job_directory / "status.json").read_text(encoding="utf-8")
+    )
+    controller = json.loads(
+        (local_job_directory / "controller.json").read_text(encoding="utf-8")
+    )
+    results = local_job_directory / "results"
+    manifest = json.loads((results / "manifest.json").read_text(encoding="utf-8"))
+
+    expected_complete = {
+        "schema_version": 1,
+        "job_id": remote_job_id,
+        "profile": profile,
+        "benchmark_kind": benchmark_kind,
+        "mps_process_count": mps_process_count,
+        "success": True,
+        "error_message": None,
+        "output_directory": "results",
+    }
+    for field, expected in expected_complete.items():
+        if complete.get(field) != expected:
+            raise RuntimeError(
+                f"complete.json {field} does not match the claimed task."
+            )
+    if not isinstance(complete.get("gpu_provenance"), dict):
+        raise RuntimeError("complete.json gpu_provenance must be a JSON object.")
+
+    expected_status = {
+        "schema_version": 1,
+        "job_id": remote_job_id,
+        "state": "succeeded",
+        "error_message": None,
+    }
+    for field, expected in expected_status.items():
+        if status.get(field) != expected:
+            raise RuntimeError(f"status.json {field} does not match complete.json.")
+
+    if not (
+        complete.get("started_at_utc") == status.get("started_at_utc")
+        and complete.get("completed_at_utc")
+        == status.get("completed_at_utc")
+        == status.get("heartbeat_at_utc")
+    ):
+        raise RuntimeError("status.json and complete.json timestamps are inconsistent.")
+
+    expected_controller = {
+        "schema_version": 1,
+        "task_id": task,
+        "instance_name": instance_name,
+        "remote_job_id": remote_job_id,
+        "attempt": 1,
+        "lifecycle_state": "retrieved",
+        "failure_details": None,
+        "local_result_path": str(local_job_directory),
+    }
+    for field, expected in expected_controller.items():
+        if controller.get(field) != expected:
+            raise RuntimeError(
+                f"controller.json {field} does not match the active controller state."
+            )
+
+    if manifest.get("schema_version") != _RESULT_MANIFEST_SCHEMA_VERSION:
+        raise RuntimeError("results/manifest.json has an unsupported schema_version.")
+    if manifest.get("benchmark_kind") != benchmark_kind:
+        raise RuntimeError("results/manifest.json benchmark_kind does not match.")
+    if manifest.get("mps_process_count") != mps_process_count:
+        raise RuntimeError("results/manifest.json mps_process_count does not match.")
+    if manifest.get("execution") != {"success": True, "error_message": None}:
+        raise RuntimeError(
+            "results/manifest.json does not record successful execution."
+        )
+    manifest_started = datetime.fromisoformat(
+        manifest["timestamps"]["started_at_utc"].replace("Z", "+00:00")
+    )
+    manifest_completed = datetime.fromisoformat(
+        manifest["timestamps"]["completed_at_utc"].replace("Z", "+00:00")
+    )
+    if (
+        manifest_started.tzinfo is None
+        or manifest_completed.tzinfo is None
+        or manifest_started > manifest_completed
+    ):
+        raise RuntimeError("results/manifest.json timestamps are inconsistent.")
+
+    required_artifacts = (
+        results / "input" / _DEFAULT_INPUT_NAME,
+        results / "output" / f"{benchmark_kind}_benchmark.out",
+        results / "logs" / "stdout.log",
+        results / "logs" / "stderr.log",
+        results / "manifest.json",
+    )
+    if any(not artifact.is_file() for artifact in required_artifacts):
+        raise RuntimeError("Retrieved result bundle is missing required artifacts.")
+    if any(path.is_symlink() for path in results.rglob("*")):
+        raise RuntimeError("Retrieved result bundle must not contain symbolic links.")
+    return manifest_started
+
+
+def _upload_results(
+    result_directory: Path,
+    s3_bucket: str,
+    task: str,
+    started_at: datetime,
+    artifact_output: s3fs.S3FileSystem | None,
+) -> str:
+    """Upload a validated result bundle to the existing S3 layout.
+
+    Parameters
+    ----------
+    result_directory : Path
+        Validated local artifact directory.
+    s3_bucket : str
+        Bucket receiving the benchmark artifacts.
+    task : str
+        Claimed task identifier used for the hashed partition.
+    started_at : datetime
+        Validated benchmark start time used for the date partition.
+    artifact_output : s3fs.S3FileSystem | None
+        Optional filesystem override for tests.
+
+    Returns
+    -------
+    str
+        Uploaded date/hash prefix.
+
+    Raises
+    ------
+    ValueError
+        If the bucket name is empty.
+    """
+    bucket = s3_bucket.strip()
+    if not bucket:
+        raise ValueError("s3_bucket cannot be empty.")
+    prefix = _build_result_s3_prefix(task, started_at)
+    manifest_path = result_directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["s3_bucket"] = bucket
+    manifest["s3_prefix"] = prefix
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    output = artifact_output if artifact_output is not None else s3fs.S3FileSystem()
+    for artifact in sorted(result_directory.rglob("*")):
+        if artifact.is_file():
+            relative_path = artifact.relative_to(result_directory).as_posix()
+            output.put(str(artifact), f"{bucket}/{prefix}/{relative_path}")
+    return prefix
+
+
 def launch_brev_task(
     task_db: TaskStatusDB,
     benchmark_repo_path: Path,
+    s3_bucket: str,
     result_directory: Path,
     startup_script: Path,
     transport: BrevTransport | None = None,
+    artifact_output: s3fs.S3FileSystem | None = None,
 ) -> tuple[str, Path] | None:
-    """Claim, dispatch, monitor, retrieve, and clean up one Brev task.
+    """Claim, dispatch, retrieve, upload, and finalize one Brev task.
 
     Parameters
     ----------
@@ -404,12 +598,16 @@ def launch_brev_task(
         Trusted controller Exorcist database.
     benchmark_repo_path : Path
         Local benchmark repository supplying credentialless worker inputs.
+    s3_bucket : str
+        Bucket receiving validated benchmark artifacts.
     result_directory : Path
         Controller directory receiving the completed local result bundle.
     startup_script : Path
         Credentialless Brev startup script.
     transport : BrevTransport | None, optional
         Brev CLI transport, replaceable by a test double.
+    artifact_output : s3fs.S3FileSystem | None, optional
+        Artifact filesystem override used by credential-free tests.
 
     Returns
     -------
@@ -529,6 +727,32 @@ def launch_brev_task(
         )
         if worker_failure is not None:
             raise RuntimeError(f"Brev worker failed: {worker_failure}")
+        started_at = _validate_retrieved_job(
+            local_job_directory,
+            task,
+            remote_job_id,
+            instance_name,
+            profile,
+            benchmark_kind.value,
+            mps_process_count,
+        )
+        _transition(task_db, task, controller_path, controller_state, "validated")
+        s3_prefix = _upload_results(
+            local_job_directory / "results",
+            s3_bucket,
+            task,
+            started_at,
+            artifact_output,
+        )
+        _transition(
+            task_db,
+            task,
+            controller_path,
+            controller_state,
+            "uploaded",
+            s3_bucket=s3_bucket.strip(),
+            s3_prefix=s3_prefix,
+        )
     except (Exception, KeyboardInterrupt) as exc:
         failure = exc
 
@@ -571,5 +795,29 @@ def launch_brev_task(
         if isinstance(failure, KeyboardInterrupt):
             raise failure
         raise RuntimeError(f"Brev task '{task}' failed: {details}") from failure
+
+    try:
+        _transition(task_db, task, controller_path, controller_state, "finalized")
+        task_db.mark_task_completed(task, success=True)
+    except Exception as exc:
+        details = f"task success persistence failed: {type(exc).__name__}: {exc}"
+        now = datetime.now(timezone.utc).isoformat()
+        controller_state.setdefault("transitions", []).append(
+            {"state": "failed", "at_utc": now}
+        )
+        controller_state.update(
+            lifecycle_state="failed",
+            updated_at_utc=now,
+            failure_details=details,
+        )
+        _write_controller_state(controller_path, controller_state)
+        try:
+            task_db.mark_task_completed(task, success=False)
+        except Exception as mark_exc:
+            controller_state["failure_details"] = (
+                f"{details}; task failure persistence failed: {mark_exc}"
+            )
+            _write_controller_state(controller_path, controller_state)
+        raise RuntimeError(f"Brev task '{task}' failed: {details}") from exc
 
     return task, local_job_directory
