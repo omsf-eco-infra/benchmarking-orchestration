@@ -104,6 +104,16 @@ def test_brev_startup_is_credentialless_and_workspace_rooted() -> None:
     script = Path("brev_startup.sh").read_text(encoding="utf-8")
 
     assert 'BASE_PATH="/home/ubuntu/workspace"' in script
+    assert (
+        "git clone -b feat/brev --single-branch \\\n"
+        '  https://github.com/omsf-eco-infra/benchmarking-orchestration.git "$CLI_PATH"'
+        in script
+    )
+    assert (
+        "git clone -b industry_benchmarks --single-branch \\\n"
+        '  https://github.com/OpenFreeEnergy/performance_benchmarks.git "$BENCH_REPO_PATH"'
+        in script
+    )
     assert "TURSO_" not in script
     assert "S3_BUCKET" not in script
     assert "AWS_" not in script

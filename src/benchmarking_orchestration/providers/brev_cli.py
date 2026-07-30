@@ -70,10 +70,6 @@ class BrevCLI:
 
     def launch(
         self,
-        benchmark_repo_path: Annotated[
-            Path,
-            Parameter(validator=validators.Path(file_okay=False, dir_okay=True)),
-        ],
         s3_bucket: Annotated[
             str, Parameter(env_var="BENCHMARK_S3_BUCKET", show_env_var=True)
         ],
@@ -88,8 +84,6 @@ class BrevCLI:
 
         Parameters
         ----------
-        benchmark_repo_path : Path
-            Local benchmark repository copied as credentialless worker input.
         s3_bucket : str
             S3 bucket receiving validated benchmark artifacts.
         result_directory : Path, default=Path("brev-results")
@@ -102,7 +96,6 @@ class BrevCLI:
         config = config or Config()
         result = launch_brev_task(
             config.task_db,
-            benchmark_repo_path,
             s3_bucket,
             result_directory,
             startup_script,
