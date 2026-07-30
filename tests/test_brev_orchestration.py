@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
+import fsspec
 import pytest
+import s3fs
 import sqlalchemy as sqla
 from exorcist.models import TaskStatus
 
@@ -24,6 +26,8 @@ class _FakeTransport:
         self,
         markers: list[str],
         inspect_results: list[dict[str, Any] | None] | None = None,
+        retrieved_overrides: dict[str, dict[str, Any]] | None = None,
+        copy_failure: str | None = None,
     ) -> None:
         """Configure marker and optional instance inspection results.
 
@@ -33,6 +37,10 @@ class _FakeTransport:
             Framed marker responses returned by remote exec calls.
         inspect_results : list[dict[str, Any] | None] | None, optional
             Ordered instance inspection results.
+        retrieved_overrides : dict[str, dict[str, Any]] | None, optional
+            Field overrides for mocked retrieved JSON files.
+        copy_failure : str | None, optional
+            Retrieved destination name whose copy should fail.
         """
         self.markers = iter(markers)
         self.inspect_results = list(inspect_results or [])
@@ -41,6 +49,8 @@ class _FakeTransport:
         self.job_payload: dict[str, Any] | None = None
         self.staged_files: set[str] = set()
         self.detached_command = ""
+        self.retrieved_overrides = retrieved_overrides or {}
+        self.copy_failure = copy_failure
 
     def create(
         self, instance_name: str, instance_type: str, startup_script: Path
@@ -90,11 +100,64 @@ class _FakeTransport:
                 if path.is_file()
             }
         elif isinstance(destination, Path):
+            if destination.name == self.copy_failure:
+                raise RuntimeError(f"retrieval failed for {destination.name}")
+            assert self.job_payload is not None
+            started_at = "2026-01-02T03:04:05+00:00"
+            completed_at = "2026-01-02T03:05:05+00:00"
             if destination.name == "results":
-                destination.mkdir(parents=True)
-                (destination / "artifact.txt").write_text("result", encoding="utf-8")
+                for directory in ("input", "output", "logs"):
+                    (destination / directory).mkdir(parents=True, exist_ok=True)
+                (destination / "input" / "ross_dodecahedron_jacs.json").write_text(
+                    "{}", encoding="utf-8"
+                )
+                benchmark_kind = self.job_payload["benchmark_kind"]
+                (destination / "output" / f"{benchmark_kind}_benchmark.out").write_text(
+                    "{}", encoding="utf-8"
+                )
+                (destination / "logs" / "stdout.log").write_text("", encoding="utf-8")
+                (destination / "logs" / "stderr.log").write_text("", encoding="utf-8")
+                payload = {
+                    "schema_version": 4,
+                    "benchmark_kind": benchmark_kind,
+                    "mps_process_count": self.job_payload["mps_process_count"],
+                    "execution": {"success": True, "error_message": None},
+                    "timestamps": {
+                        "started_at_utc": started_at,
+                        "completed_at_utc": completed_at,
+                    },
+                }
+                payload.update(self.retrieved_overrides.get("manifest.json", {}))
+                (destination / "manifest.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
             else:
-                destination.write_text("{}", encoding="utf-8")
+                common = {
+                    "schema_version": 1,
+                    "job_id": self.job_payload["job_id"],
+                    "started_at_utc": started_at,
+                    "completed_at_utc": completed_at,
+                }
+                if destination.name == "status.json":
+                    payload = {
+                        **common,
+                        "state": "succeeded",
+                        "heartbeat_at_utc": completed_at,
+                        "error_message": None,
+                    }
+                else:
+                    payload = {
+                        **common,
+                        "profile": self.job_payload["profile"],
+                        "benchmark_kind": self.job_payload["benchmark_kind"],
+                        "mps_process_count": self.job_payload["mps_process_count"],
+                        "success": True,
+                        "error_message": None,
+                        "output_directory": self.job_payload["output_directory"],
+                        "gpu_provenance": {},
+                    }
+                payload.update(self.retrieved_overrides.get(destination.name, {}))
+                destination.write_text(json.dumps(payload), encoding="utf-8")
         return "copied"
 
     def exec(self, instance_name: str, command: str) -> str:
@@ -279,13 +342,16 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
     monkeypatch.setattr(orchestration.time, "sleep", sleep_calls.append)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "controller-secret")
     monkeypatch.setenv("TURSO_AUTH_TOKEN", "controller-token")
+    artifacts = fsspec.filesystem("memory")
 
     result = launch_brev_task(
         task_db,
         _benchmark_repo(tmp_path),
+        "brev-success-bucket",
         tmp_path / "results",
         _startup_script(tmp_path),
         transport=cast(BrevTransport, transport),
+        artifact_output=cast(s3fs.S3FileSystem, artifacts),
     )
 
     assert result is not None
@@ -328,11 +394,22 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
         "running",
         "worker_succeeded",
         "retrieved",
+        "validated",
+        "uploaded",
+        "finalized",
     ]
-    assert (result[1] / "results" / "artifact.txt").is_file()
+    assert (result[1] / "results" / "output" / "md_benchmark.out").is_file()
+    uploaded = artifacts.find("brev-success-bucket")
+    assert any(path.endswith("/output/md_benchmark.out") for path in uploaded)
+    uploaded_manifest = json.loads(
+        artifacts.cat(
+            next(path for path in uploaded if path.endswith("/manifest.json"))
+        )
+    )
+    assert uploaded_manifest["s3_prefix"].startswith("runs/2026-01-02/")
     assert sleep_calls == [120]
 
-    assert _task_row(task_db, claimed)["status"] == TaskStatus.IN_PROGRESS.value
+    assert _task_row(task_db, claimed)["status"] == TaskStatus.COMPLETED.value
     assert _task_row(task_db, claimed)["tries"] == 1
     assert _task_row(task_db, task_ids[1])["status"] == TaskStatus.AVAILABLE.value
     assert _task_row(task_db, task_ids[1])["tries"] == 0
@@ -393,6 +470,7 @@ def test_launch_persists_and_cleans_up_terminal_failures(
         launch_brev_task(
             task_db,
             _benchmark_repo(tmp_path),
+            "brev-failure-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
             transport=cast(BrevTransport, transport),
@@ -405,11 +483,198 @@ def test_launch_persists_and_cleans_up_terminal_failures(
     assert controller["instance_cleaned_up"] is True
     assert sum(call[0] == "delete" for call in transport.calls) == delete_count
     if scenario == "worker":
-        assert (controller_path.parent / "results" / "artifact.txt").is_file()
+        assert (
+            controller_path.parent / "results" / "output" / "md_benchmark.out"
+        ).is_file()
         assert (controller_path.parent / "complete.json").is_file()
     task_row = _task_row(task_db, task)
     assert task_row["status"] == TaskStatus.TOO_MANY_RETRIES.value
     assert task_row["tries"] == 1
+
+
+def test_launch_preserves_retrieved_validation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject an uncorrelated completion marker before upload.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Pytest temporary directory.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch fixture.
+    """
+    task_db, task_ids = _queued_tasks(tmp_path)
+    task = task_ids[0]
+    remote_job_id = _parse_brev_task_metadata(task)[5]
+    transport = _FakeTransport(
+        ["complete\n" + json.dumps({"job_id": remote_job_id, "success": True})],
+        retrieved_overrides={"complete.json": {"job_id": "job-other"}},
+    )
+    artifacts = fsspec.filesystem("memory")
+    monkeypatch.setattr(orchestration.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="complete.json job_id"):
+        launch_brev_task(
+            task_db,
+            _benchmark_repo(tmp_path),
+            "brev-validation-bucket",
+            tmp_path / "results",
+            _startup_script(tmp_path),
+            transport=cast(BrevTransport, transport),
+            artifact_output=cast(s3fs.S3FileSystem, artifacts),
+        )
+
+    controller_path = tmp_path / "results" / remote_job_id / "controller.json"
+    controller = json.loads(controller_path.read_text(encoding="utf-8"))
+    assert "complete.json job_id" in controller["failure_details"]
+    assert artifacts.find("brev-validation-bucket") == []
+    assert controller["instance_cleaned_up"] is True
+    assert _task_row(task_db, task)["status"] == TaskStatus.TOO_MANY_RETRIES.value
+
+
+def test_launch_preserves_retrieval_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep local controller details when result retrieval fails.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Pytest temporary directory.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch fixture.
+    """
+    task_db, task_ids = _queued_tasks(tmp_path)
+    task = task_ids[0]
+    remote_job_id = _parse_brev_task_metadata(task)[5]
+    transport = _FakeTransport(
+        ["complete\n" + json.dumps({"job_id": remote_job_id, "success": True})],
+        copy_failure="results",
+    )
+    monkeypatch.setattr(orchestration.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="retrieval failed for results"):
+        launch_brev_task(
+            task_db,
+            _benchmark_repo(tmp_path),
+            "brev-retrieval-bucket",
+            tmp_path / "results",
+            _startup_script(tmp_path),
+            transport=cast(BrevTransport, transport),
+        )
+
+    controller = json.loads(
+        (tmp_path / "results" / remote_job_id / "controller.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "retrieval failed for results" in controller["failure_details"]
+    assert controller["instance_cleaned_up"] is True
+
+
+def test_launch_preserves_upload_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retain validated local artifacts when controller upload fails.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Pytest temporary directory.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch fixture.
+    """
+    task_db, task_ids = _queued_tasks(tmp_path)
+    task = task_ids[0]
+    remote_job_id = _parse_brev_task_metadata(task)[5]
+    transport = _FakeTransport(
+        ["complete\n" + json.dumps({"job_id": remote_job_id, "success": True})]
+    )
+    monkeypatch.setattr(orchestration.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        orchestration,
+        "_upload_results",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("upload failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="upload failed"):
+        launch_brev_task(
+            task_db,
+            _benchmark_repo(tmp_path),
+            "brev-upload-bucket",
+            tmp_path / "results",
+            _startup_script(tmp_path),
+            transport=cast(BrevTransport, transport),
+        )
+
+    controller_path = tmp_path / "results" / remote_job_id / "controller.json"
+    controller = json.loads(controller_path.read_text(encoding="utf-8"))
+    assert "upload failed" in controller["failure_details"]
+    assert (controller_path.parent / "results" / "manifest.json").is_file()
+    assert controller["instance_cleaned_up"] is True
+    assert _task_row(task_db, task)["status"] == TaskStatus.TOO_MANY_RETRIES.value
+
+
+def test_launch_preserves_success_recording_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Persist local failure detail when Exorcist success recording fails.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Pytest temporary directory.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch fixture.
+    """
+    task_db, task_ids = _queued_tasks(tmp_path)
+    task = task_ids[0]
+    remote_job_id = _parse_brev_task_metadata(task)[5]
+    transport = _FakeTransport(
+        ["complete\n" + json.dumps({"job_id": remote_job_id, "success": True})]
+    )
+    artifacts = fsspec.filesystem("memory")
+    real_mark_completed = task_db.mark_task_completed
+
+    def _mark_completed(task_id: str, success: bool) -> None:
+        """Fail only the successful completion write.
+
+        Parameters
+        ----------
+        task_id : str
+            Claimed task identifier.
+        success : bool
+            Completion outcome.
+        """
+        if success:
+            raise RuntimeError("database unavailable")
+        real_mark_completed(task_id, success)
+
+    monkeypatch.setattr(task_db, "mark_task_completed", _mark_completed)
+    monkeypatch.setattr(orchestration.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="task success persistence failed"):
+        launch_brev_task(
+            task_db,
+            _benchmark_repo(tmp_path),
+            "brev-finalization-bucket",
+            tmp_path / "results",
+            _startup_script(tmp_path),
+            transport=cast(BrevTransport, transport),
+            artifact_output=cast(s3fs.S3FileSystem, artifacts),
+        )
+
+    controller = json.loads(
+        (tmp_path / "results" / remote_job_id / "controller.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert controller["lifecycle_state"] == "failed"
+    assert "database unavailable" in controller["failure_details"]
+    assert controller["instance_cleaned_up"] is True
+    assert artifacts.find("brev-finalization-bucket")
+    assert _task_row(task_db, task)["status"] == TaskStatus.TOO_MANY_RETRIES.value
 
 
 def test_launch_cleans_up_when_user_interrupts(
@@ -445,6 +710,7 @@ def test_launch_cleans_up_when_user_interrupts(
         launch_brev_task(
             task_db,
             _benchmark_repo(tmp_path),
+            "brev-interrupt-bucket",
             tmp_path / "results",
             _startup_script(tmp_path),
             transport=cast(BrevTransport, transport),

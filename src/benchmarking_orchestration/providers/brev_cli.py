@@ -74,6 +74,9 @@ class BrevCLI:
             Path,
             Parameter(validator=validators.Path(file_okay=False, dir_okay=True)),
         ],
+        s3_bucket: Annotated[
+            str, Parameter(env_var="BENCHMARK_S3_BUCKET", show_env_var=True)
+        ],
         result_directory: Path = Path("brev-results"),
         startup_script: Annotated[
             Path, Parameter(validator=validators.Path(file_okay=True, dir_okay=False))
@@ -87,6 +90,8 @@ class BrevCLI:
         ----------
         benchmark_repo_path : Path
             Local benchmark repository copied as credentialless worker input.
+        s3_bucket : str
+            S3 bucket receiving validated benchmark artifacts.
         result_directory : Path, default=Path("brev-results")
             Controller directory receiving the local result bundle.
         startup_script : Path, default=Path("brev_startup.sh")
@@ -98,6 +103,7 @@ class BrevCLI:
         result = launch_brev_task(
             config.task_db,
             benchmark_repo_path,
+            s3_bucket,
             result_directory,
             startup_script,
         )
@@ -106,6 +112,5 @@ class BrevCLI:
             return
         task, local_job_directory = result
         print(
-            f"Retrieved Brev task '{task}' to '{local_job_directory}'. "
-            "Task remains in progress until controller upload finalization."
+            f"Uploaded and finalized Brev task '{task}' from '{local_job_directory}'."
         )

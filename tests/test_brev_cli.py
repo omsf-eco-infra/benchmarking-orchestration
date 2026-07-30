@@ -127,6 +127,7 @@ def test_launch_runs_one_controller_task(
 
     BrevCLI().launch(
         benchmark_repo,
+        "benchmark-results",
         result_directory,
         startup_script,
         config=cast(Config, SimpleNamespace(task_db=task_db)),
@@ -136,8 +137,9 @@ def test_launch_runs_one_controller_task(
         (
             task_db,
             benchmark_repo,
+            "benchmark-results",
             result_directory,
             startup_script,
         )
     ]
-    assert "remains in progress" in capsys.readouterr().out
+    assert "Uploaded and finalized" in capsys.readouterr().out
