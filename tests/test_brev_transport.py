@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from benchmarking_orchestration.brev import BrevTransport
 
 
@@ -97,6 +99,28 @@ def test_inspect_returns_none_for_missing_instance(monkeypatch) -> None:
     )
 
     assert BrevTransport().inspect("missing") is None
+
+
+def test_transport_reports_brev_error_output(monkeypatch) -> None:
+    """Include Brev's standard error in command failures.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch fixture.
+    """
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, **_kwargs: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(
+                1, command, output="", stderr="No capacity for this instance type.\n"
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="No capacity for this instance type"):
+        BrevTransport().create("brev-job", "g5.xlarge", Path("brev_startup.sh"))
 
 
 def test_brev_startup_is_credentialless_and_workspace_rooted() -> None:
