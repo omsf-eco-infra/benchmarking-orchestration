@@ -32,12 +32,17 @@ class BrevTransport:
         str
             Command standard output with surrounding whitespace removed.
         """
-        result = subprocess.run(
-            [self.executable, *arguments],
-            capture_output=True,
-            check=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                [self.executable, *arguments],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            if error.stderr:
+                raise RuntimeError(f"{error}: {error.stderr.strip()}") from error
+            raise
         return result.stdout.strip()
 
     def create(
