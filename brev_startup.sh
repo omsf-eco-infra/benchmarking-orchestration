@@ -6,7 +6,7 @@ CACHE_PATH="$BASE_PATH/pixi-cache"
 CLI_PATH="$BASE_PATH/benchmarking-orchestration"
 BENCH_REPO_PATH="$BASE_PATH/performance_benchmarks"
 
-mkdir -p "$CACHE_PATH"
+mkdir -p "$CACHE_PATH" "$BASE_PATH/jobs"
 curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=0.64.0 bash
 export PATH="$HOME/.pixi/bin:$PATH"
 export PIXI_CACHE_DIR="$CACHE_PATH"

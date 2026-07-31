@@ -128,6 +128,7 @@ def test_brev_startup_is_credentialless_and_workspace_rooted() -> None:
     script = Path("brev_startup.sh").read_text(encoding="utf-8")
 
     assert 'BASE_PATH="/home/ubuntu/workspace"' in script
+    assert 'mkdir -p "$CACHE_PATH" "$BASE_PATH/jobs"' in script
     assert (
         "git clone -b feat/brev --single-branch \\\n"
         '  https://github.com/omsf-eco-infra/benchmarking-orchestration.git "$CLI_PATH"'
