@@ -1,10 +1,6 @@
 [project]
 authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
-dependencies = [
-    "cyclopts>=4.10.1",
-    "sqlalchemy-libsql>=0.2.0,<0.3",
-    "salad-cloud-sdk>=0.9.0a16,<0.10"
-]
+dependencies = ["cyclopts>=4.10.1"]
 name = "benchmarking-orchestration"
 requires-python = ">= 3.11"
 version = "0.1.0"
@@ -15,7 +11,13 @@ requires = ["hatchling"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["osx-64", "osx-arm64", "linux-64"]
+platforms = [
+    "osx-64",
+    "osx-arm64",
+    "linux-64",
+    "linux-aarch64",
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12.8" },
+]
 
 [tool.pixi.pypi-dependencies]
 benchmarking_orchestration = { path = ".", editable = true }
@@ -24,13 +26,14 @@ exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 [tool.pixi.dependencies]
 boto3 = ">=1.42.81,<2"
 python = "==3.13" # sqlalchemy-libsql does not work on Python 3.14 in testing
+fsspec = ">=2026.6.0,<2027"
+s3fs = ">=2026.6.0,<2027"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
-dev = { features = ["test", "dev", "analysis"]}
+dev = { features = ["test", "dev"]}
 bench = {features = ["bench"]}
-analysis = {features = ["analysis"]}
 
 [tool.pixi.feature.test.dependencies]
 pytest-xdist = ">=3.8.0,<4"
@@ -46,46 +49,17 @@ test = "pytest -q -n auto"
 ruff = ">=0.15.8,<0.16"
 ty = "*"
 
-
 [tool.pixi.feature.dev.tasks]
 fmt = "ruff format"
 check = "ruff check"
 
 [tool.pixi.feature.bench]
-platforms = ["linux-64", "osx-arm64"]
-system-requirements = {cuda = "12.8"}
+platforms = ["linux-64-cuda", "osx-arm64"]
 
 [tool.pixi.feature.bench.dependencies]
 openfe = ">=1.10.0,<2"
 pandas = ">=2.3.3,<3"
 
-[tool.feature.analysis]
-platforms = ["linux-64", "osx-arm64", "osx-64"]
-
-[tool.pixi.feature.analysis.tasks]
-check = "marimo check analysis/test.py"
-
-[tool.pixi.feature.analysis.dependencies]
-duckdb = ">=1.0.0"
-altair = ">=5.4.0"
-pyarrow = ">=23.0.1,<24"
-polars = ">=1.9.0"
-openai = ">=1.55.3"
-ruff = ">=0.15.8,<0.16"
-nbformat = ">=5.7.0"
-vegafusion = ">=2.0.0"
-vl-convert-python = ">=1.0.0"
-marimo = ">=0.21.1"
-sqlglot = ">=23.4"
-
-[tool.marimo.package_management]
-manager = "pixi"
-
 [tool.ty.environment]
 python = ".pixi/envs/dev/bin/python"
 
-# [dependency-groups]
-# dev = ["salad-cloud-sdk>=0.9.0a16,<0.10"]
-
-# [dependency-groups]
-# analysis = ["marimo[recommended]", "obstore"]

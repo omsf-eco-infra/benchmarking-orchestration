@@ -23,5 +23,3 @@ jobs:
       - name: Run tests
         run: pixi run --environment dev --clean-env test
 
-      - name: Check notebook
-        run: pixi run --environment analysis --clean-env check
