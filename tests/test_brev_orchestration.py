@@ -28,6 +28,7 @@ class _FakeTransport:
         inspect_results: list[dict[str, Any] | None] | None = None,
         retrieved_overrides: dict[str, dict[str, Any]] | None = None,
         copy_failure: str | None = None,
+        ssh_probe_failures: int = 0,
     ) -> None:
         """Configure marker and optional instance inspection results.
 
@@ -41,6 +42,8 @@ class _FakeTransport:
             Field overrides for mocked retrieved JSON files.
         copy_failure : str | None, optional
             Retrieved destination name whose copy should fail.
+        ssh_probe_failures : int, default=0
+            Number of readiness SSH probes that should fail.
         """
         self.markers = iter(markers)
         self.inspect_results = list(inspect_results or [])
@@ -51,6 +54,7 @@ class _FakeTransport:
         self.detached_command = ""
         self.retrieved_overrides = retrieved_overrides or {}
         self.copy_failure = copy_failure
+        self.ssh_probe_failures = ssh_probe_failures
 
     def create(
         self, instance_name: str, instance_type: str, startup_script: Path
@@ -176,6 +180,11 @@ class _FakeTransport:
             Worker PID or framed marker response.
         """
         self.calls.append(("exec", instance_name, command))
+        if command == "true":
+            if self.ssh_probe_failures:
+                self.ssh_probe_failures -= 1
+                raise RuntimeError("Connection closed by SSH gateway")
+            return ""
         if command.startswith("mv "):
             return ""
         if command.startswith("nohup "):
@@ -199,7 +208,16 @@ class _FakeTransport:
         self.calls.append(("inspect", instance_name))
         if self.inspect_results:
             return self.inspect_results.pop(0)
-        return {"name": instance_name} if self.instance_exists else None
+        return (
+            {
+                "name": instance_name,
+                "status": "RUNNING",
+                "shell_status": "READY",
+                "health_status": "HEALTHY",
+            }
+            if self.instance_exists
+            else None
+        )
 
     def delete(self, instance_name: str) -> str:
         """Record permanent instance deletion.
@@ -287,7 +305,9 @@ def _task_row(task_db: TaskStatusDB, task: str) -> dict[str, Any]:
 
 
 def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Run one successful task without claiming its queued sibling.
 
@@ -297,6 +317,8 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
         Pytest temporary directory.
     monkeypatch : pytest.MonkeyPatch
         Pytest monkeypatch fixture.
+    capsys : pytest.CaptureFixture[str]
+        Pytest output capture fixture.
     """
     task_db, task_ids = _queued_tasks(tmp_path, count=2)
     claimed = task_ids[0]
@@ -313,7 +335,22 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
                 }
             ),
             "complete\n" + json.dumps({"job_id": remote_job_id, "success": True}),
-        ]
+        ],
+        inspect_results=[
+            {
+                "name": "starting-instance",
+                "status": "RUNNING",
+                "shell_status": "NOT READY",
+                "health_status": "UNHEALTHY",
+            },
+            {
+                "name": "ready-instance",
+                "status": "RUNNING",
+                "shell_status": "READY",
+                "health_status": "HEALTHY",
+            },
+        ],
+        ssh_probe_failures=1,
     )
     sleep_calls: list[float] = []
     monkeypatch.setattr(orchestration.time, "sleep", sleep_calls.append)
@@ -385,12 +422,69 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
         )
     )
     assert uploaded_manifest["s3_prefix"].startswith("runs/2026-01-02/")
-    assert sleep_calls == [120]
+    assert sleep_calls == [5, 5, 30]
+    progress = capsys.readouterr().out
+    assert "waiting for SSH readiness (status=RUNNING, shell=NOT READY" in progress
+    assert "SSH probe failed (Connection closed by SSH gateway); retrying" in progress
+    assert "SSH connection ready" in progress
+    assert f"[brev] {controller['instance_name']}: staged" in progress
+    assert f"[brev] {controller['instance_name']}: running heartbeat={now}" in progress
 
     assert _task_row(task_db, claimed)["status"] == TaskStatus.COMPLETED.value
     assert _task_row(task_db, claimed)["tries"] == 1
     assert _task_row(task_db, task_ids[1])["status"] == TaskStatus.AVAILABLE.value
     assert _task_row(task_db, task_ids[1])["tries"] == 0
+
+
+def test_launch_times_out_before_copy_when_shell_is_not_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail and clean up without copying to an unhealthy Brev instance.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Pytest temporary directory.
+    monkeypatch : pytest.MonkeyPatch
+        Pytest monkeypatch fixture.
+    """
+    task_db, task_ids = _queued_tasks(tmp_path)
+    task = task_ids[0]
+    remote_job_id = _parse_brev_task_metadata(task)[5]
+    transport = _FakeTransport(
+        [],
+        inspect_results=[
+            {
+                "name": "unhealthy-instance",
+                "status": "RUNNING",
+                "shell_status": "NOT READY",
+                "health_status": "UNHEALTHY",
+            }
+        ],
+    )
+    times = iter((100.0, 160.0))
+    monkeypatch.setattr(orchestration.time, "monotonic", lambda: next(times))
+
+    with pytest.raises(RuntimeError, match="did not become SSH-ready within 60"):
+        launch_brev_task(
+            task_db,
+            "brev-timeout-bucket",
+            tmp_path / "results",
+            _startup_script(tmp_path),
+            transport=cast(BrevTransport, transport),
+        )
+
+    assert not any(call[0] == "copy" for call in transport.calls)
+    assert sum(call[0] == "delete" for call in transport.calls) == 1
+    controller = json.loads(
+        (tmp_path / "results" / remote_job_id / "controller.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert controller["lifecycle_state"] == "failed"
+    assert "shell_status='NOT READY'" in controller["failure_details"]
+    assert controller["instance_cleaned_up"] is True
+    assert _task_row(task_db, task)["status"] == TaskStatus.TOO_MANY_RETRIES.value
 
 
 @pytest.mark.parametrize(

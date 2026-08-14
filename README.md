@@ -241,7 +241,7 @@ pixi run python -m benchmarking_orchestration launch brev \
 
 You can set `BENCHMARK_S3_BUCKET` instead of passing the bucket argument. Run `launch brev` again to process the next queued task.
 
-The controller starts the remote worker with `nohup` and does not keep an SSH session open as a completion signal. It polls durable worker markers at a fixed 120-second interval. There is no controller timeout and no stale-heartbeat cutoff; the `--timeout-seconds` creation option is retained in task metadata but is not enforced by `launch brev`.
+After `brev create` reports the instance running, the controller prints flushed lifecycle updates while waiting for Brev to report both `shell_status=READY` and `health_status=HEALTHY`. It then requires a successful `brev exec true` SSH probe before copying the job, retrying transient gateway failures within `--timeout-seconds`. The probe also establishes Brev's persistent SSH control connection for the copy. The controller then starts the remote worker with `nohup`, prints each observed worker heartbeat, and polls durable worker markers every 30 seconds without using a long-running SSH session as a completion signal. Worker polling has no timeout or stale-heartbeat cutoff.
 
 ### Trust and credentials
 
@@ -303,7 +303,7 @@ The included `Dockerfile` builds a CUDA-enabled Pixi image, installs the `bench`
 - AWS benchmark workers require `S3_BUCKET` in the runtime environment; Brev workers are credentialless and upload nothing directly.
 - AWS launch task IDs may embed base64-encoded cloud-init content.
 - Brev uses one attempt and one task per instance, with no automatic retries or GPU/profile mapping.
-- Brev polling is fixed at 120 seconds and has no controller timeout or stale-heartbeat cutoff.
+- Brev worker polling is fixed at 30 seconds and has no timeout or stale-heartbeat cutoff; `--timeout-seconds` applies only to post-creation SSH readiness.
 - Benchmark execution imports code directly from the external `performance_benchmarks` checkout.
 - Result analysis is currently a Python API, not a first-class CLI command.
 

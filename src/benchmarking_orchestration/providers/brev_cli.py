@@ -52,7 +52,7 @@ class BrevCLI:
         mps_process_count : int, default=1
             Number of worker benchmark processes.
         timeout_seconds : float, default=3600
-            Controller timeout for each job.
+            Maximum wait for Brev SSH readiness after instance creation.
         config : Config | None, optional
             Shared task database configuration.
         """
