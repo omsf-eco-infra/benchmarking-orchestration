@@ -21,7 +21,7 @@ def test_transport_runs_required_brev_argument_lists(monkeypatch) -> None:
         (
             "brev-job\n",
             "copied\n",
-            "remote output\n",
+            "remote outputbrev-job\n",
             '{"workspaces": [{"name": "brev-job", "status": "RUNNING"}]}',
             "brev-job\n",
         )
