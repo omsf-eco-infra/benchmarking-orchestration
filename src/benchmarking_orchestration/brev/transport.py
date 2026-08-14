@@ -106,9 +106,10 @@ class BrevTransport:
         Returns
         -------
         str
-            Remote command standard output.
+            Remote command standard output without Brev's chaining name.
         """
-        return self._run("exec", instance_name, command)
+        output = self._run("exec", instance_name, command)
+        return output.removesuffix(instance_name).rstrip()
 
     def inspect(self, instance_name: str) -> dict[str, Any] | None:
         """Inspect one instance from Brev's JSON instance listing.
