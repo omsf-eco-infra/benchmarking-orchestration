@@ -23,7 +23,8 @@ _REMOTE_CLI_PATH = f"{_REMOTE_WORKSPACE}/benchmarking-orchestration"
 _REMOTE_BENCH_REPO_PATH = f"{_REMOTE_WORKSPACE}/performance_benchmarks"
 _REMOTE_JOBS_PATH = f"{_REMOTE_WORKSPACE}/jobs"
 _DEFAULT_INPUT_NAME = "ross_dodecahedron_jacs.json"
-_POLL_INTERVAL_SECONDS = 120
+_INSTANCE_READY_POLL_INTERVAL_SECONDS = 5
+_POLL_INTERVAL_SECONDS = 30
 _HEARTBEAT_INTERVAL_SECONDS = 30
 _RESULT_MANIFEST_SCHEMA_VERSION = 4
 
@@ -100,6 +101,12 @@ def _transition(
     state["updated_at_utc"] = now
     _write_controller_state(controller_path, state)
     _touch_exorcist_task(task_db, task)
+    heartbeat = changes.get("heartbeat_at_utc")
+    heartbeat_detail = f" heartbeat={heartbeat}" if heartbeat else ""
+    print(
+        f"[brev] {state['instance_name']}: {lifecycle_state}{heartbeat_detail}",
+        flush=True,
+    )
 
 
 def _prepare_job_directory(
@@ -144,6 +151,92 @@ def _prepare_job_directory(
         json.dumps(payload, indent=2), encoding="utf-8"
     )
     return job_directory
+
+
+def _wait_for_instance_ready(
+    transport: BrevTransport,
+    instance_name: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Wait until Brev reports a healthy instance with a ready shell.
+
+    Parameters
+    ----------
+    transport : BrevTransport
+        Brev CLI transport.
+    instance_name : str
+        Created Brev instance name.
+    timeout_seconds : float
+        Maximum time to wait after ``brev create`` returns.
+
+    Returns
+    -------
+    dict[str, Any]
+        Ready Brev instance metadata.
+
+    Raises
+    ------
+    RuntimeError
+        If the instance disappears, stops, or does not become SSH-ready.
+    """
+    now = time.monotonic()
+    deadline = now + timeout_seconds
+    next_progress = now
+    previous_statuses: tuple[str, str, str] | None = None
+    last_ssh_error: str | None = None
+    while True:
+        instance = transport.inspect(instance_name)
+        if instance is None:
+            raise RuntimeError(f"Brev instance '{instance_name}' disappeared.")
+
+        status = str(instance.get("status") or "").upper()
+        shell_status = str(instance.get("shell_status") or "").upper()
+        health_status = str(instance.get("health_status") or "").upper()
+        statuses = status, shell_status, health_status
+        now = time.monotonic()
+        if statuses != previous_statuses or now >= next_progress:
+            print(
+                f"[brev] {instance_name}: waiting for SSH readiness "
+                f"(status={status}, shell={shell_status}, health={health_status})",
+                flush=True,
+            )
+            previous_statuses = statuses
+            next_progress = now + _HEARTBEAT_INTERVAL_SECONDS
+        if (
+            status == "RUNNING"
+            and shell_status == "READY"
+            and health_status == "HEALTHY"
+        ):
+            try:
+                transport.exec(instance_name, "true")
+            except Exception as exc:
+                last_ssh_error = str(exc).splitlines()[-1]
+                print(
+                    f"[brev] {instance_name}: SSH probe failed "
+                    f"({last_ssh_error}); retrying",
+                    flush=True,
+                )
+            else:
+                print(f"[brev] {instance_name}: SSH connection ready", flush=True)
+                return instance
+        if status in {"DELETING", "ERROR", "FAILED", "FAILURE", "STOPPED", "STOPPING"}:
+            raise RuntimeError(
+                f"Brev instance '{instance_name}' entered {status!r} before its "
+                "shell became ready."
+            )
+
+        remaining = deadline - now
+        if remaining <= 0:
+            ssh_detail = (
+                f" Last SSH probe error: {last_ssh_error}." if last_ssh_error else ""
+            )
+            raise RuntimeError(
+                f"Brev instance '{instance_name}' did not become SSH-ready within "
+                f"{timeout_seconds:g} seconds (status={status!r}, "
+                f"shell_status={shell_status!r}, health_status={health_status!r})."
+                f"{ssh_detail}"
+            )
+        time.sleep(min(_INSTANCE_READY_POLL_INTERVAL_SECONDS, remaining))
 
 
 def _detached_worker_command(remote_job_directory: str) -> str:
@@ -314,6 +407,8 @@ def _poll_remote_job(
         marker_kind, payload = _read_remote_marker(
             transport, instance_name, remote_job_directory
         )
+        if marker_kind == "pending":
+            print(f"[brev] {instance_name}: worker pending", flush=True)
         if marker_kind == "complete":
             assert payload is not None
             if payload.get("job_id") != remote_job_id:
@@ -608,7 +703,7 @@ def launch_brev_task(
         (
             benchmark_kind,
             mps_process_count,
-            _timeout_seconds,
+            timeout_seconds,
             profile,
             instance_type,
             remote_job_id,
@@ -655,6 +750,7 @@ def launch_brev_task(
             _transition(task_db, task, controller_path, controller_state, "creating")
             creation_attempted = True
             transport.create(instance_name, instance_type, startup_script)
+            _wait_for_instance_ready(transport, instance_name, timeout_seconds)
             _transition(
                 task_db, task, controller_path, controller_state, "instance_ready"
             )

@@ -32,7 +32,7 @@ def queue_brev_tasks(
     mps_process_count : int
         Number of worker benchmark processes.
     timeout_seconds : float
-        Controller timeout for each job.
+        Maximum wait for Brev SSH readiness after instance creation.
 
     Returns
     -------
