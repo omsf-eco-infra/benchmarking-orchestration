@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_PATH="/home/ubuntu/workspace"
+BASE_PATH="$HOME/workspace"
 CACHE_PATH="$BASE_PATH/pixi-cache"
 CLI_PATH="$BASE_PATH/benchmarking-orchestration"
 BENCH_REPO_PATH="$BASE_PATH/performance_benchmarks"
