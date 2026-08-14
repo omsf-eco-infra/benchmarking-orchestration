@@ -12,7 +12,7 @@ import sys
 import tempfile
 import traceback
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import fsspec
@@ -24,6 +24,61 @@ from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
 
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
 _RESULT_MANIFEST_SCHEMA_VERSION = 4
+
+
+def _stage_benchmark_inputs(
+    benchmark_script_fs: fsspec.AbstractFileSystem,
+    source_root: str,
+    input_directory: Path,
+) -> Path:
+    """Copy the benchmark specification and files it references.
+
+    Parameters
+    ----------
+    benchmark_script_fs : fsspec.AbstractFileSystem
+        Filesystem containing the benchmark repository.
+    source_root : str
+        Repository root prefix including its trailing separator.
+    input_directory : Path
+        Local artifact directory receiving benchmark inputs.
+
+    Returns
+    -------
+    Path
+        Local benchmark specification path.
+
+    Raises
+    ------
+    ValueError
+        If a referenced input path is unsafe or malformed.
+    """
+    input_file = input_directory / _DEFAULT_BENCHMARK_JSON
+    benchmark_script_fs.get(
+        f"{source_root}data/{_DEFAULT_BENCHMARK_JSON}", str(input_file)
+    )
+    payload = json.loads(input_file.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or any(
+        not isinstance(system, dict) for system in payload.values()
+    ):
+        raise ValueError("Benchmark input must map system names to JSON objects.")
+    for system in payload.values():
+        for field in ("protein", "edge", "cofactors"):
+            value = system.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise ValueError(f"Benchmark input {field} must be a string.")
+            relative_path = PurePosixPath(value)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError(
+                    f"Benchmark input {field} must be a safe relative path."
+                )
+            destination = input_directory.joinpath(*relative_path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            benchmark_script_fs.get(
+                f"{source_root}data/{relative_path.as_posix()}", str(destination)
+            )
+    return input_file
 
 
 def _build_result_s3_prefix(task_id: str, run_started_at: datetime) -> str:
@@ -270,13 +325,12 @@ def _run_benchmark_to_directory(
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace = Path(tmpdir)
         benchmark_dir = workspace / "benchmark"
-        input_file = input_directory / _DEFAULT_BENCHMARK_JSON
         source_root = f"{benchmark_root.rstrip('/')}/" if benchmark_root else ""
         benchmark_script_fs.get(
             f"{source_root}benchmark", str(benchmark_dir), recursive=True
         )
-        benchmark_script_fs.get(
-            f"{source_root}data/{_DEFAULT_BENCHMARK_JSON}", str(input_file)
+        input_file = _stage_benchmark_inputs(
+            benchmark_script_fs, source_root, input_directory
         )
 
         command, output_name, _module = _resolve_benchmark_runner(

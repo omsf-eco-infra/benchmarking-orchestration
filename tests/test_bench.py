@@ -28,10 +28,22 @@ def _benchmark_repo(tmp_path: Path) -> Path:
         Repository root.
     """
     (tmp_path / "benchmark").mkdir(parents=True)
-    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "files").mkdir(parents=True)
     (tmp_path / "data" / "ross_dodecahedron_jacs.json").write_text(
-        "{}", encoding="utf-8"
+        json.dumps(
+            {
+                "system_a": {
+                    "protein": "files/protein.pdb",
+                    "edge": "files/edge.json",
+                }
+            }
+        ),
+        encoding="utf-8",
     )
+    (tmp_path / "data" / "files" / "protein.pdb").write_text(
+        "protein", encoding="utf-8"
+    )
+    (tmp_path / "data" / "files" / "edge.json").write_text("{}", encoding="utf-8")
     (tmp_path / "benchmark" / "md_benchmark.py").write_text(
         "import json\n"
         "class Command:\n"
@@ -63,6 +75,8 @@ def test_local_benchmark_writes_artifacts_without_provider_metadata(
         (output_directory / "output" / "md_benchmark.out").read_text(encoding="utf-8")
     ) == {"system_a": 42.0}
     assert (output_directory / "input" / "ross_dodecahedron_jacs.json").is_file()
+    assert (output_directory / "input" / "files" / "protein.pdb").is_file()
+    assert (output_directory / "input" / "files" / "edge.json").is_file()
     assert (output_directory / "logs" / "stdout.log").is_file()
     assert (output_directory / "logs" / "stderr.log").is_file()
     manifest = json.loads(
