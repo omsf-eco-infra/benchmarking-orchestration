@@ -18,7 +18,7 @@ from ..task_id import _parse_brev_task_metadata
 from ..tasks import TaskStatusDB
 from .transport import BrevTransport
 
-_REMOTE_WORKSPACE = "/home/ubuntu/workspace"
+_REMOTE_WORKSPACE = "workspace"
 _REMOTE_CLI_PATH = f"{_REMOTE_WORKSPACE}/benchmarking-orchestration"
 _REMOTE_BENCH_REPO_PATH = f"{_REMOTE_WORKSPACE}/performance_benchmarks"
 _REMOTE_JOBS_PATH = f"{_REMOTE_WORKSPACE}/jobs"
@@ -245,7 +245,7 @@ def _detached_worker_command(remote_job_directory: str) -> str:
     Parameters
     ----------
     remote_job_directory : str
-        Absolute credentialless job directory on the Brev instance.
+        Credentialless job directory relative to the Brev SSH user's home.
 
     Returns
     -------
@@ -253,7 +253,6 @@ def _detached_worker_command(remote_job_directory: str) -> str:
         Remote shell command using ``nohup`` and complete stream redirection.
     """
     command = [
-        "/home/ubuntu/.pixi/bin/pixi",
         "run",
         "--manifest-path",
         f"{_REMOTE_CLI_PATH}/pyproject.toml",
@@ -270,7 +269,8 @@ def _detached_worker_command(remote_job_directory: str) -> str:
     ]
     worker_log = f"{remote_job_directory}/worker.log"
     return (
-        f"nohup {shlex.join(command)} > {shlex.quote(worker_log)} 2>&1 "
+        f'nohup "$HOME/.pixi/bin/pixi" {shlex.join(command)} '
+        f"> {shlex.quote(worker_log)} 2>&1 "
         "< /dev/null & echo $!"
     )
 

@@ -381,10 +381,11 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
     assert transport.staged_files == {"job.json"}
     assert any(
         call[0] == "exec"
-        and call[2].startswith("mv /home/ubuntu/workspace/performance_benchmarks ")
+        and call[2].startswith("mv workspace/performance_benchmarks ")
         and call[2].endswith("/benchmark-repo")
         for call in transport.calls
     )
+    assert 'nohup "$HOME/.pixi/bin/pixi" run ' in transport.detached_command
     assert "nohup " in transport.detached_command
     assert "< /dev/null & echo $!" in transport.detached_command
     assert "worker job" in transport.detached_command
