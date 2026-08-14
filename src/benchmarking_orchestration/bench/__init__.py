@@ -6,12 +6,13 @@ import hashlib
 import importlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 import traceback
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import fsspec
@@ -19,12 +20,65 @@ import s3fs
 from fsspec.implementations.github import GithubFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from benchmarking_orchestration.aws.info import MetadataService
-
 from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
 
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
 _RESULT_MANIFEST_SCHEMA_VERSION = 4
+
+
+def _stage_benchmark_inputs(
+    benchmark_script_fs: fsspec.AbstractFileSystem,
+    source_root: str,
+    input_directory: Path,
+) -> Path:
+    """Copy the benchmark specification and files it references.
+
+    Parameters
+    ----------
+    benchmark_script_fs : fsspec.AbstractFileSystem
+        Filesystem containing the benchmark repository.
+    source_root : str
+        Repository root prefix including its trailing separator.
+    input_directory : Path
+        Local artifact directory receiving benchmark inputs.
+
+    Returns
+    -------
+    Path
+        Local benchmark specification path.
+
+    Raises
+    ------
+    ValueError
+        If a referenced input path is unsafe or malformed.
+    """
+    input_file = input_directory / _DEFAULT_BENCHMARK_JSON
+    benchmark_script_fs.get(
+        f"{source_root}data/{_DEFAULT_BENCHMARK_JSON}", str(input_file)
+    )
+    payload = json.loads(input_file.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or any(
+        not isinstance(system, dict) for system in payload.values()
+    ):
+        raise ValueError("Benchmark input must map system names to JSON objects.")
+    for system in payload.values():
+        for field in ("protein", "edge", "cofactors"):
+            value = system.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise ValueError(f"Benchmark input {field} must be a string.")
+            relative_path = PurePosixPath(value)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError(
+                    f"Benchmark input {field} must be a safe relative path."
+                )
+            destination = input_directory.joinpath(*relative_path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            benchmark_script_fs.get(
+                f"{source_root}data/{relative_path.as_posix()}", str(destination)
+            )
+    return input_file
 
 
 def _build_result_s3_prefix(task_id: str, run_started_at: datetime) -> str:
@@ -226,6 +280,182 @@ class AbstractBenchmark(abc.ABC):
         """
 
 
+def _run_benchmark_to_directory(
+    benchmark_script_fs: fsspec.AbstractFileSystem,
+    benchmark_root: str,
+    output_directory: Path,
+    benchmark_kind: BenchmarkKind,
+    mps_process_count: int,
+    started_at: datetime,
+) -> None:
+    """Execute a benchmark and write its artifacts to a local directory.
+
+    Parameters
+    ----------
+    benchmark_script_fs : fsspec.AbstractFileSystem
+        Filesystem containing the benchmark repository.
+    benchmark_root : str
+        Repository root within ``benchmark_script_fs``.
+    output_directory : Path
+        Caller-owned root for the local input, output, log, and manifest bundle,
+        keeping benchmark execution independent from provider upload.
+    benchmark_kind : BenchmarkKind
+        Workload to execute.
+    mps_process_count : int
+        Number of benchmark processes.
+    started_at : datetime
+        Benchmark start time.
+
+    Raises
+    ------
+    RuntimeError
+        If benchmark execution fails or does not produce an output file.
+    """
+    output_directory.mkdir(parents=True, exist_ok=True)
+    input_directory = output_directory / "input"
+    result_directory = output_directory / "output"
+    log_directory = output_directory / "logs"
+    for artifact_directory in (input_directory, result_directory, log_directory):
+        shutil.rmtree(artifact_directory, ignore_errors=True)
+    (output_directory / "manifest.json").unlink(missing_ok=True)
+    input_directory.mkdir(exist_ok=True)
+    result_directory.mkdir(exist_ok=True)
+    log_directory.mkdir(exist_ok=True)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        benchmark_dir = workspace / "benchmark"
+        source_root = f"{benchmark_root.rstrip('/')}/" if benchmark_root else ""
+        benchmark_script_fs.get(
+            f"{source_root}benchmark", str(benchmark_dir), recursive=True
+        )
+        input_file = _stage_benchmark_inputs(
+            benchmark_script_fs, source_root, input_directory
+        )
+
+        command, output_name, _module = _resolve_benchmark_runner(
+            benchmark_dir, benchmark_kind
+        )
+        output_file = result_directory / output_name
+        stdout_log = log_directory / "stdout.log"
+        stderr_log = log_directory / "stderr.log"
+        exception_log = log_directory / "exception_traceback.log"
+
+        if mps_process_count == 1:
+            stdout, stderr, error, trace = _invoke_benchmark_command(
+                command, input_file, output_file
+            )
+            stdout_log.write_text(stdout, encoding="utf-8")
+            stderr_log.write_text(stderr, encoding="utf-8")
+            if trace:
+                exception_log.write_text(trace, encoding="utf-8")
+        else:
+            children = workspace / "children"
+            children.mkdir()
+            processes: list[tuple[subprocess.Popen[str], Path]] = []
+            for index in range(mps_process_count):
+                child_output = children / f"{output_file.stem}.process-{index}.out"
+                processes.append(
+                    (
+                        subprocess.Popen(
+                            [
+                                sys.executable,
+                                "-c",
+                                "from benchmarking_orchestration.bench import _run_benchmark_subprocess_entrypoint as run; import sys; raise SystemExit(run(*sys.argv[1:]))",
+                                str(benchmark_dir),
+                                benchmark_kind.value,
+                                str(input_file),
+                                str(child_output),
+                                str(children / f"stdout.process-{index}.log"),
+                                str(children / f"stderr.process-{index}.log"),
+                                str(
+                                    children
+                                    / f"exception_traceback.process-{index}.log"
+                                ),
+                            ]
+                        ),
+                        child_output,
+                    )
+                )
+            failed = next(
+                (process for process, _output in processes if process.wait()), None
+            )
+            error = RuntimeError("A benchmark subprocess failed.") if failed else None
+            trace = str(error) if error else None
+            stdout_log.write_text("", encoding="utf-8")
+            stderr_log.write_text("", encoding="utf-8")
+            if error is None:
+                _aggregate_child_outputs(
+                    None,
+                    [output for _process, output in processes],
+                    output_file,
+                    benchmark_kind,
+                )
+            else:
+                exception_log.write_text(trace, encoding="utf-8")
+
+        if error is None and not output_file.exists():
+            error = RuntimeError("Benchmark did not produce an output file.")
+            exception_log.write_text(str(error), encoding="utf-8")
+
+    completed_at = datetime.now(timezone.utc)
+    manifest = {
+        "schema_version": _RESULT_MANIFEST_SCHEMA_VERSION,
+        "benchmark_kind": benchmark_kind.value,
+        "mps_process_count": mps_process_count,
+        "execution": {
+            "success": error is None,
+            "error_message": str(error) if error else None,
+        },
+        "timestamps": {
+            "started_at_utc": _isoformat_utc(started_at),
+            "completed_at_utc": _isoformat_utc(completed_at),
+        },
+    }
+    manifest_path = output_directory / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    if error:
+        raise RuntimeError(
+            f"{benchmark_kind.value.upper()} benchmark failed: {error}"
+        ) from error
+
+
+def run_local_benchmark(
+    benchmark_repo_path: Path,
+    output_directory: Path,
+    benchmark_kind: BenchmarkKind = BenchmarkKind.MD,
+    mps_process_count: int = 1,
+) -> None:
+    """Run a benchmark and create artifacts on the local filesystem.
+
+    Parameters
+    ----------
+    benchmark_repo_path : Path
+        Local performance benchmark repository.
+    output_directory : Path
+        Caller-owned root for the local input, output, log, and manifest bundle,
+        keeping benchmark execution independent from provider upload.
+    benchmark_kind : BenchmarkKind, default=BenchmarkKind.MD
+        Workload to run.
+    mps_process_count : int, default=1
+        Number of processes to run.
+
+    Raises
+    ------
+    RuntimeError
+        If benchmark execution fails or does not produce an output file.
+    """
+    _run_benchmark_to_directory(
+        LocalFileSystem(),
+        str(benchmark_repo_path),
+        output_directory,
+        benchmark_kind,
+        mps_process_count,
+        datetime.now(timezone.utc),
+    )
+
+
 class AWSOpenFEBenchmark(AbstractBenchmark):
     """Run OpenFE benchmarks using fsspec source and artifact filesystems."""
 
@@ -277,135 +507,47 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
         prefix = _build_result_s3_prefix(task_id, started_at)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir)
-            benchmark_dir = workspace / "benchmark"
-            input_file = workspace / "data" / _DEFAULT_BENCHMARK_JSON
-            input_file.parent.mkdir()
-            source_root = f"{self.benchmark_root}/" if self.benchmark_root else ""
-            self.benchmark_script_fs.get(
-                f"{source_root}benchmark", str(benchmark_dir), recursive=True
-            )
-            self.benchmark_script_fs.get(
-                f"{source_root}data/{_DEFAULT_BENCHMARK_JSON}", str(input_file)
-            )
-
-            command, output_name, _module = _resolve_benchmark_runner(
-                benchmark_dir, self.benchmark_kind
-            )
-            output_file = workspace / output_name
-            stdout_log, stderr_log = workspace / "stdout.log", workspace / "stderr.log"
-            exception_log = workspace / "exception_traceback.log"
-
-            if self.mps_process_count == 1:
-                stdout, stderr, error, trace = _invoke_benchmark_command(
-                    command, input_file, output_file
-                )
-                stdout_log.write_text(stdout, encoding="utf-8")
-                stderr_log.write_text(stderr, encoding="utf-8")
-                if trace:
-                    exception_log.write_text(trace, encoding="utf-8")
-            else:
-                children = workspace / "children"
-                children.mkdir()
-                processes: list[tuple[subprocess.Popen[str], Path]] = []
-                for index in range(self.mps_process_count):
-                    child_output = children / f"{output_file.stem}.process-{index}.out"
-                    processes.append(
-                        (
-                            subprocess.Popen(
-                                [
-                                    sys.executable,
-                                    "-c",
-                                    "from benchmarking_orchestration.bench import _run_benchmark_subprocess_entrypoint as run; import sys; raise SystemExit(run(*sys.argv[1:]))",
-                                    str(benchmark_dir),
-                                    self.benchmark_kind.value,
-                                    str(input_file),
-                                    str(child_output),
-                                    str(children / f"stdout.process-{index}.log"),
-                                    str(children / f"stderr.process-{index}.log"),
-                                    str(
-                                        children
-                                        / f"exception_traceback.process-{index}.log"
-                                    ),
-                                ]
-                            ),
-                            child_output,
-                        )
-                    )
-                failed = next(
-                    (process for process, _output in processes if process.wait()), None
-                )
-                error = (
-                    RuntimeError("A benchmark subprocess failed.") if failed else None
-                )
-                trace = str(error) if error else None
-                stdout_log.write_text("", encoding="utf-8")
-                stderr_log.write_text("", encoding="utf-8")
-                if error is None:
-                    _aggregate_child_outputs(
-                        None,
-                        [output for _process, output in processes],
-                        output_file,
-                        self.benchmark_kind,
-                    )
-                else:
-                    exception_log.write_text(trace, encoding="utf-8")
-
-            if error is None and not output_file.exists():
-                error = RuntimeError("Benchmark did not produce an output file.")
-                exception_log.write_text(str(error), encoding="utf-8")
-
-            completed_at = datetime.now(timezone.utc)
-            artifacts = [input_file, stdout_log, stderr_log]
-            if output_file.exists():
-                artifacts.append(output_file)
-            if exception_log.exists():
-                artifacts.append(exception_log)
-            for artifact in artifacts:
-                category = (
-                    "input"
-                    if artifact == input_file
-                    else "output"
-                    if artifact == output_file
-                    else "logs"
-                )
-                self.artifact_output.put(
-                    str(artifact),
-                    f"{self.s3_bucket}/{prefix}/{category}/{artifact.name}",
-                )
-
-            manifest = {
-                "schema_version": _RESULT_MANIFEST_SCHEMA_VERSION,
-                "benchmark_kind": self.benchmark_kind.value,
-                "mps_process_count": self.mps_process_count,
-                "s3_bucket": self.s3_bucket,
-                "s3_prefix": prefix,
-                "execution": {
-                    "success": error is None,
-                    "error_message": str(error) if error else None,
-                },
-                "timestamps": {
-                    "started_at_utc": _isoformat_utc(started_at),
-                    "completed_at_utc": _isoformat_utc(completed_at),
-                },
-            }
+            output_directory = Path(tmpdir) / "artifacts"
+            execution_error = None
             try:
+                _run_benchmark_to_directory(
+                    self.benchmark_script_fs,
+                    self.benchmark_root,
+                    output_directory,
+                    self.benchmark_kind,
+                    self.mps_process_count,
+                    started_at,
+                )
+            except Exception as exc:
+                if not (output_directory / "manifest.json").exists():
+                    raise
+                execution_error = exc
+
+            manifest_path = output_directory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["s3_bucket"] = self.s3_bucket
+            manifest["s3_prefix"] = prefix
+            try:
+                from benchmarking_orchestration.aws.info import MetadataService
+
                 metadata = MetadataService()
                 manifest["instance_id"] = metadata.instance_id()
                 manifest["instance_type"] = metadata.instance_type()
                 manifest["ami_id"] = metadata.ami_id()
             except Exception:
                 pass
-            manifest_path = workspace / "manifest.json"
             manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-            self.artifact_output.put(
-                str(manifest_path), f"{self.s3_bucket}/{prefix}/manifest.json"
-            )
 
-            if error:
-                raise RuntimeError(
-                    f"{self.benchmark_kind.value.upper()} benchmark failed: {error}"
-                ) from error
+            for artifact in sorted(output_directory.rglob("*")):
+                if artifact.is_file():
+                    relative_path = artifact.relative_to(output_directory).as_posix()
+                    self.artifact_output.put(
+                        str(artifact),
+                        f"{self.s3_bucket}/{prefix}/{relative_path}",
+                    )
+
+            if execution_error is not None:
+                raise execution_error
 
 
 def run_benchmark(
