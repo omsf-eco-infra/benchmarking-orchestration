@@ -153,7 +153,7 @@ def _build_brev_task_id(
     mps_process_count : int
         Number of worker benchmark processes.
     timeout_seconds : float
-        Controller timeout for the job.
+        Maximum wait for Brev SSH readiness after instance creation.
 
     Returns
     -------
