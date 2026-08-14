@@ -180,7 +180,7 @@ class _FakeTransport:
             Worker PID or framed marker response.
         """
         self.calls.append(("exec", instance_name, command))
-        if command == "true":
+        if command == "test -f workspace/startup-complete":
             if self.ssh_probe_failures:
                 self.ssh_probe_failures -= 1
                 raise RuntimeError("Connection closed by SSH gateway")
@@ -426,8 +426,11 @@ def test_launch_claims_one_task_stages_detached_job_and_retrieves_results(
     assert sleep_calls == [5, 5, 30]
     progress = capsys.readouterr().out
     assert "waiting for SSH readiness (status=RUNNING, shell=NOT READY" in progress
-    assert "SSH probe failed (Connection closed by SSH gateway); retrying" in progress
-    assert "SSH connection ready" in progress
+    assert (
+        "SSH/startup probe failed (Connection closed by SSH gateway); retrying"
+        in progress
+    )
+    assert "SSH connection and startup ready" in progress
     assert f"[brev] {controller['instance_name']}: staged" in progress
     assert f"[brev] {controller['instance_name']}: running heartbeat={now}" in progress
 
