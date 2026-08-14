@@ -22,6 +22,7 @@ _REMOTE_WORKSPACE = "workspace"
 _REMOTE_CLI_PATH = f"{_REMOTE_WORKSPACE}/benchmarking-orchestration"
 _REMOTE_BENCH_REPO_PATH = f"{_REMOTE_WORKSPACE}/performance_benchmarks"
 _REMOTE_JOBS_PATH = f"{_REMOTE_WORKSPACE}/jobs"
+_REMOTE_STARTUP_MARKER = f"{_REMOTE_WORKSPACE}/startup-complete"
 _DEFAULT_INPUT_NAME = "ross_dodecahedron_jacs.json"
 _INSTANCE_READY_POLL_INTERVAL_SECONDS = 5
 _POLL_INTERVAL_SECONDS = 30
@@ -183,7 +184,7 @@ def _wait_for_instance_ready(
     deadline = now + timeout_seconds
     next_progress = now
     previous_statuses: tuple[str, str, str] | None = None
-    last_ssh_error: str | None = None
+    last_probe_error: str | None = None
     while True:
         instance = transport.inspect(instance_name)
         if instance is None:
@@ -208,16 +209,21 @@ def _wait_for_instance_ready(
             and health_status == "HEALTHY"
         ):
             try:
-                transport.exec(instance_name, "true")
+                transport.exec(
+                    instance_name, f"test -f {shlex.quote(_REMOTE_STARTUP_MARKER)}"
+                )
             except Exception as exc:
-                last_ssh_error = str(exc).splitlines()[-1]
+                last_probe_error = str(exc).splitlines()[-1]
                 print(
-                    f"[brev] {instance_name}: SSH probe failed "
-                    f"({last_ssh_error}); retrying",
+                    f"[brev] {instance_name}: SSH/startup probe failed "
+                    f"({last_probe_error}); retrying",
                     flush=True,
                 )
             else:
-                print(f"[brev] {instance_name}: SSH connection ready", flush=True)
+                print(
+                    f"[brev] {instance_name}: SSH connection and startup ready",
+                    flush=True,
+                )
                 return instance
         if status in {"DELETING", "ERROR", "FAILED", "FAILURE", "STOPPED", "STOPPING"}:
             raise RuntimeError(
@@ -227,14 +233,16 @@ def _wait_for_instance_ready(
 
         remaining = deadline - now
         if remaining <= 0:
-            ssh_detail = (
-                f" Last SSH probe error: {last_ssh_error}." if last_ssh_error else ""
+            probe_detail = (
+                f" Last SSH/startup probe error: {last_probe_error}."
+                if last_probe_error
+                else ""
             )
             raise RuntimeError(
                 f"Brev instance '{instance_name}' did not become SSH-ready within "
                 f"{timeout_seconds:g} seconds (status={status!r}, "
                 f"shell_status={shell_status!r}, health_status={health_status!r})."
-                f"{ssh_detail}"
+                f"{probe_detail}"
             )
         time.sleep(min(_INSTANCE_READY_POLL_INTERVAL_SECONDS, remaining))
 

@@ -16,3 +16,4 @@ git clone -b feat/brev --single-branch \
 git clone -b industry_benchmarks --single-branch \
   https://github.com/OpenFreeEnergy/performance_benchmarks.git "$BENCH_REPO_PATH"
 pixi install --manifest-path "$CLI_PATH/pyproject.toml" -e bench
+touch "$BASE_PATH/startup-complete"

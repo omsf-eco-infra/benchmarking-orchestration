@@ -241,7 +241,7 @@ pixi run python -m benchmarking_orchestration launch brev \
 
 You can set `BENCHMARK_S3_BUCKET` instead of passing the bucket argument. Run `launch brev` again to process the next queued task.
 
-After `brev create` reports the instance running, the controller prints flushed lifecycle updates while waiting for Brev to report both `shell_status=READY` and `health_status=HEALTHY`. It then requires a successful `brev exec true` SSH probe before copying the job, retrying transient gateway failures within `--timeout-seconds`. The probe also establishes Brev's persistent SSH control connection for the copy. The controller then starts the remote worker with `nohup`, prints each observed worker heartbeat, and polls durable worker markers every 30 seconds without using a long-running SSH session as a completion signal. Worker polling has no timeout or stale-heartbeat cutoff.
+After `brev create` reports the instance running, the controller prints flushed lifecycle updates while waiting for Brev to report both `shell_status=READY` and `health_status=HEALTHY`. It then requires a successful SSH probe that verifies the startup script's completion marker before copying the job, retrying transient gateway or startup failures within `--timeout-seconds`. The probe also establishes Brev's persistent SSH control connection for the copy. The controller then starts the remote worker with `nohup`, prints each observed worker heartbeat, and polls durable worker markers every 30 seconds without using a long-running SSH session as a completion signal. Worker polling has no timeout or stale-heartbeat cutoff.
 
 ### Trust and credentials
 

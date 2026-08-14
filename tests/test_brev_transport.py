@@ -129,6 +129,7 @@ def test_brev_startup_is_credentialless_and_workspace_rooted() -> None:
 
     assert 'BASE_PATH="$HOME/workspace"' in script
     assert 'mkdir -p "$CACHE_PATH" "$BASE_PATH/jobs"' in script
+    assert 'touch "$BASE_PATH/startup-complete"' in script
     assert (
         "git clone -b feat/brev --single-branch \\\n"
         '  https://github.com/omsf-eco-infra/benchmarking-orchestration.git "$CLI_PATH"'
