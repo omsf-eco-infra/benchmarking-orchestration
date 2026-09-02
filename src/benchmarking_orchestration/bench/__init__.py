@@ -332,7 +332,7 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
                             child_output,
                         )
                     )
-return_codes = [process.wait() for process, _output in processes]
+                return_codes = [process.wait() for process, _output in processes]
                 failed = any(return_codes)
                 error = (
                     RuntimeError("A benchmark subprocess failed.") if failed else None
