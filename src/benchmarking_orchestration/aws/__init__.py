@@ -161,36 +161,34 @@ def get_instance_type_vcpu_count(
     RuntimeError
         If AWS metadata cannot be resolved for the instance type.
     """
-    normalized_instance_type = instance_type.strip().lower()
-    if not normalized_instance_type:
+    if not instance_type:
         raise ValueError("instance type cannot be empty.")
 
-    normalized_region = region.strip()
-    if not normalized_region:
+    if not region:
         raise ValueError("region cannot be empty.")
 
-    ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    ec2 = ec2_client or boto3.client("ec2", region_name=region)
     try:
-        vcpus_by_type = _resolve_vcpus_by_instance_type(ec2, [normalized_instance_type])
+        vcpus_by_type = _resolve_vcpus_by_instance_type(ec2, [instance_type])
     except ClientError as exc:
         error = exc.response.get("Error", {})
         code = error.get("Code", "")
         message = error.get("Message", str(exc))
         raise RuntimeError(
-            f"AWS error while resolving vCPU count for instance type '{normalized_instance_type}' "
-            f"in region '{normalized_region}': {code or message}"
+            f"AWS error while resolving vCPU count for instance type '{instance_type}' "
+            f"in region '{region}': {code or message}"
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
-            f"AWS error while resolving vCPU count for instance type '{normalized_instance_type}' "
-            f"in region '{normalized_region}': {exc}"
+            f"AWS error while resolving vCPU count for instance type '{instance_type}' "
+            f"in region '{region}': {exc}"
         ) from exc
 
-    vcpu_count = vcpus_by_type.get(normalized_instance_type)
+    vcpu_count = vcpus_by_type.get(instance_type)
     if vcpu_count is None:
         raise RuntimeError(
-            f"Unable to resolve vCPU count for instance type '{normalized_instance_type}' "
-            f"in region '{normalized_region}'."
+            f"Unable to resolve vCPU count for instance type '{instance_type}' "
+            f"in region '{region}'."
         )
 
     return vcpu_count
@@ -218,43 +216,42 @@ def validate_launch_instance_type(
     RuntimeError
         If AWS validation fails or the type is unavailable in region.
     """
-    normalized = instance_type.strip().lower()
-    if not normalized:
+    if not instance_type:
         raise ValueError("instance type cannot be empty.")
 
-    if not _is_launch_supported_instance_type(normalized):
+    if not _is_launch_supported_instance_type(instance_type):
         raise ValueError(
             "Instance type must be in the G/VT/P family (start with 'g', 'vt', or 'p')."
         )
 
     ec2 = ec2_client or boto3.client("ec2", region_name=region)
     try:
-        response = ec2.describe_instance_types(InstanceTypes=[normalized])
+        response = ec2.describe_instance_types(InstanceTypes=[instance_type])
     except ClientError as exc:
         error = exc.response.get("Error", {})
         code = error.get("Code", "")
         message = error.get("Message", str(exc))
         if code in {"InvalidInstanceType", "InvalidParameterValue"}:
             raise RuntimeError(
-                f"Invalid or unavailable instance type '{normalized}' in region '{region}'."
+                f"Invalid or unavailable instance type '{instance_type}' in region '{region}'."
             ) from exc
         raise RuntimeError(
-            f"AWS error while validating instance type '{normalized}' in region '{region}': "
+            f"AWS error while validating instance type '{instance_type}' in region '{region}': "
             f"{code or message}"
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
-            f"AWS error while validating instance type '{normalized}' in region '{region}': {exc}"
+            f"AWS error while validating instance type '{instance_type}' in region '{region}': {exc}"
         ) from exc
 
     resolved_types = {
-        item.get("InstanceType", "").lower()
+        item.get("InstanceType", "")
         for item in response.get("InstanceTypes", [])
         if item.get("InstanceType")
     }
-    if normalized not in resolved_types:
+    if instance_type not in resolved_types:
         raise RuntimeError(
-            f"Invalid or unavailable instance type '{normalized}' in region '{region}'."
+            f"Invalid or unavailable instance type '{instance_type}' in region '{region}'."
         )
 
 
@@ -286,95 +283,39 @@ def get_launch_ami_details(
         If AWS validation fails, the AMI is missing in region, or the
         AMI state is not ``available``.
     """
-    normalized_ami_id = ami_id.strip().lower()
-    if not normalized_ami_id:
+    if not ami_id:
         raise ValueError("ami id cannot be empty.")
 
-    normalized_region = region.strip()
-    if not normalized_region:
+    if not region:
         raise ValueError("region cannot be empty.")
 
-    ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    ec2 = ec2_client or boto3.client("ec2", region_name=region)
     try:
-        response = ec2.describe_images(ImageIds=[normalized_ami_id])
+        response = ec2.describe_images(ImageIds=[ami_id])
     except ClientError as exc:
         error = exc.response.get("Error", {})
         code = error.get("Code", "")
         message = error.get("Message", str(exc))
         if code == "InvalidAMIID.NotFound":
             raise RuntimeError(
-                f"AMI '{normalized_ami_id}' is unavailable in region '{normalized_region}'."
+                f"AMI '{ami_id}' is unavailable in region '{region}'."
             ) from exc
         raise RuntimeError(
-            f"AWS error while validating AMI '{normalized_ami_id}' in region "
-            f"'{normalized_region}': {code or message}"
+            f"AWS error while validating AMI '{ami_id}' in region "
+            f"'{region}': {code or message}"
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
-            f"AWS error while validating AMI '{normalized_ami_id}' in region "
-            f"'{normalized_region}': {exc}"
+            f"AWS error while validating AMI '{ami_id}' in region '{region}': {exc}"
         ) from exc
 
     images = response.get("Images", [])
     first_image = images[0] if images else {}
     state = first_image.get("State")
     if not first_image or state != "available":
-        raise RuntimeError(
-            f"AMI '{normalized_ami_id}' is unavailable in region '{normalized_region}'."
-        )
+        raise RuntimeError(f"AMI '{ami_id}' is unavailable in region '{region}'.")
 
     return first_image
-
-
-def get_launch_ami_name(
-    ami_id: str, region: str = "us-east-1", ec2_client: Any = None
-) -> str:
-    """Return a human-readable AMI name for launch confirmation.
-
-    Parameters
-    ----------
-    ami_id : str
-        EC2 AMI identifier to inspect.
-    region : str, default="us-east-1"
-        AWS region where the AMI should exist.
-    ec2_client : Any, optional
-        Boto3 EC2 client (or compatible test double). When ``None``,
-        a client is created from ``boto3``.
-
-    Returns
-    -------
-    str
-        AMI ``Name`` when available, otherwise a descriptive fallback.
-    """
-    image = get_launch_ami_details(ami_id, region=region, ec2_client=ec2_client)
-    image_name = image.get("Name") or image.get("Description") or image.get("ImageId")
-    return str(image_name)
-
-
-def validate_launch_ami(
-    ami_id: str, region: str = "us-east-1", ec2_client: Any = None
-) -> None:
-    """Validate that a launch AMI exists and is available in AWS.
-
-    Parameters
-    ----------
-    ami_id : str
-        EC2 AMI identifier to validate.
-    region : str, default="us-east-1"
-        AWS region where AMI availability should be checked.
-    ec2_client : Any, optional
-        Boto3 EC2 client (or compatible test double). When ``None``,
-        a client is created from ``boto3``.
-
-    Raises
-    ------
-    ValueError
-        If the AMI identifier is empty.
-    RuntimeError
-        If AWS validation fails, the AMI is missing in region, or the
-        AMI state is not ``available``.
-    """
-    get_launch_ami_details(ami_id, region=region, ec2_client=ec2_client)
 
 
 def launch_ec2_instance(
@@ -420,22 +361,19 @@ def launch_ec2_instance(
         If AWS launch fails, the instance does not reach ``running``
         state, or response data does not include an instance identifier.
     """
-    normalized_instance_type = instance_type.strip().lower()
-    if not normalized_instance_type:
+    if not instance_type:
         raise ValueError("instance type cannot be empty.")
 
-    normalized_ami_id = ami_id.strip().lower()
-    if not normalized_ami_id:
+    if not ami_id:
         raise ValueError("ami id cannot be empty.")
 
-    normalized_region = region.strip()
-    if not normalized_region:
+    if not region:
         raise ValueError("region cannot be empty.")
 
-    ec2 = ec2_client or boto3.client("ec2", region_name=normalized_region)
+    ec2 = ec2_client or boto3.client("ec2", region_name=region)
     run_instances_kwargs = {
-        "ImageId": normalized_ami_id,
-        "InstanceType": normalized_instance_type,
+        "ImageId": ami_id,
+        "InstanceType": instance_type,
         "MinCount": 1,
         "MaxCount": 1,
         "InstanceInitiatedShutdownBehavior": "terminate",
@@ -454,13 +392,13 @@ def launch_ec2_instance(
         code = error.get("Code", "")
         message = error.get("Message", str(exc))
         raise RuntimeError(
-            f"AWS error while launching instance type '{normalized_instance_type}' "
-            f"with AMI '{normalized_ami_id}' in region '{normalized_region}': {code or message}"
+            f"AWS error while launching instance type '{instance_type}' "
+            f"with AMI '{ami_id}' in region '{region}': {code or message}"
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
-            f"AWS error while launching instance type '{normalized_instance_type}' "
-            f"with AMI '{normalized_ami_id}' in region '{normalized_region}': {exc}"
+            f"AWS error while launching instance type '{instance_type}' "
+            f"with AMI '{ami_id}' in region '{region}': {exc}"
         ) from exc
 
     instances = response.get("Instances", [])
@@ -468,8 +406,8 @@ def launch_ec2_instance(
     instance_id = first_instance.get("InstanceId")
     if not instance_id:
         raise RuntimeError(
-            f"AWS did not return an instance ID for instance type '{normalized_instance_type}' "
-            f"with AMI '{normalized_ami_id}' in region '{normalized_region}'."
+            f"AWS did not return an instance ID for instance type '{instance_type}' "
+            f"with AMI '{ami_id}' in region '{region}'."
         )
 
     try:
@@ -481,12 +419,12 @@ def launch_ec2_instance(
     except WaiterError as exc:
         raise RuntimeError(
             f"Instance '{instance_id}' did not reach running state in region "
-            f"'{normalized_region}'."
+            f"'{region}'."
         ) from exc
     except BotoCoreError as exc:
         raise RuntimeError(
             f"AWS error while waiting for instance '{instance_id}' to reach "
-            f"running state in region '{normalized_region}': {exc}"
+            f"running state in region '{region}': {exc}"
         ) from exc
 
     return instance_id
@@ -583,3 +521,10 @@ def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None)
 
     running_vcpus = sum(vcpus_by_type[itype] for itype in instance_types)
     return running_vcpus
+
+
+from .orchestration import (  # noqa: E402
+    process_aws_benchmark_task as process_aws_benchmark_task,
+    process_aws_launch_task as process_aws_launch_task,
+    queue_aws_tasks as queue_aws_tasks,
+)

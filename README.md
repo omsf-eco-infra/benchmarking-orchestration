@@ -2,10 +2,9 @@
 
 Provider-oriented CLI for queuing launch work, dispatching benchmark workers, and storing task state in an `exorcist` task database.
 
-The repository currently supports two provider flows:
+The repository currently supports one provider flow:
 
 - **AWS EC2**: validate an instance type and AMI, queue a launch task plus one or more dependent benchmark tasks, launch the instance, then run MD/RBFE benchmarks and upload artifacts to S3.
-- **Salad Cloud**: create or reuse a container group for a GPU class, queue launch/benchmark tasks, check launch-time GPU availability, and run the same benchmark task flow.
 
 This repo is no longer just a small AWS quota helper; the main CLI is now:
 
@@ -17,11 +16,8 @@ pixi run python -m benchmarking_orchestration
 
 ```text
 create aws   ...
-create salad ...
 launch aws   ...
-launch salad ...
 worker aws   ...
-worker salad ...
 ```
 
 The top-level groups are:
@@ -43,13 +39,6 @@ The top-level groups are:
 - Runs benchmark tasks by worker capability (`g3`, `g4-dn`, `g5`, `g6`, `g6-e`, `p`, `vt1`).
 - Uploads benchmark inputs, outputs, logs, and a manifest to S3.
 
-### Salad flow
-
-- Uses the `salad-cloud-sdk` to look up GPU classes.
-- Creates or reuses a deterministic Salad container group for the selected GPU capability.
-- Queues launch and benchmark tasks in the same task DB.
-- Runs benchmark tasks for Salad GPU capabilities.
-
 ### Result handling
 
 Benchmark workers upload artifacts to:
@@ -67,12 +56,25 @@ Each run includes:
 - `exception_traceback.log` when execution fails
 - `manifest.json`
 
+### Result manifest schema
+
+New manifests use schema version 5. Consumers must select a v5 parser rather
+than treating these manifests as v4. Compared with v4:
+
+- the `input`, `output`, and `logs` sections are removed; artifact locations
+  follow the directories listed above under the manifest's `s3_prefix`;
+- `execution` contains `success` and `error_message`, but no longer includes
+  `error_type`.
+
+The top-level `benchmark_kind`, `mps_process_count`, `s3_bucket`, `s3_prefix`,
+and `timestamps` fields remain. AWS instance metadata fields may be present
+when the EC2 metadata service is available.
+
 ## Requirements
 
 - `pixi`
 - Python 3.11+ at the package level
 - AWS credentials when using the AWS provider
-- Salad credentials when using the Salad provider
 
 The pinned Pixi environment currently uses Python 3.13.
 
@@ -141,13 +143,6 @@ Database selection works like this:
 - `BENCHMARK_S3_BUCKET` as a default for `create aws --s3-bucket`
 - `S3_BUCKET` at benchmark worker runtime
 
-### Salad
-
-- `SALAD_API_KEY`
-- `SALAD_ORG_NAME`
-- `SALAD_WORKER_CAPABILITY` for `worker salad`
-- `S3_BUCKET` at benchmark worker runtime
-
 ## Quick start: AWS
 
 Queue AWS launch + benchmark tasks:
@@ -188,34 +183,6 @@ pixi run python -m benchmarking_orchestration create aws --help
 pixi run python -m benchmarking_orchestration worker aws --help
 ```
 
-## Quick start: Salad
-
-Queue Salad work:
-
-```bash
-pixi run python -m benchmarking_orchestration create salad rtxa5000 \
-  ghcr.io/openforcefield/benchmark-worker:latest \
-  --benchmark-kind md \
-  --salad-api-key "$SALAD_API_KEY" \
-  --salad-org-name "$SALAD_ORG_NAME"
-```
-
-Check launch-time GPU availability for the next queued Salad launch task:
-
-```bash
-pixi run python -m benchmarking_orchestration launch salad \
-  --salad-api-key "$SALAD_API_KEY" \
-  --salad-org-name "$SALAD_ORG_NAME"
-```
-
-Run a Salad benchmark worker locally:
-
-```bash
-S3_BUCKET=my-benchmark-results \
-pixi run -e bench python -m benchmarking_orchestration worker salad rtxa5000 \
-  --bench-repo-path /path/to/performance_benchmarks
-```
-
 ## Cloud-init
 
 `cloud_init.sh` is an example AWS bootstrap script. It currently:
@@ -240,7 +207,6 @@ The included `Dockerfile` builds a CUDA-enabled Pixi image, installs the `bench`
 
 ## Current limitations / notable behavior
 
-- `launch salad` currently checks queued launch tasks and GPU availability; it does **not** yet start benchmark execution by itself.
 - Benchmark workers require `S3_BUCKET` in the runtime environment.
 - AWS launch task IDs may embed base64-encoded cloud-init content.
 - Benchmark execution imports code directly from the external `performance_benchmarks` checkout.

@@ -13,7 +13,6 @@ from benchmarking_orchestration.aws import (
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
     launch_ec2_instance,
-    validate_launch_ami,
     validate_launch_instance_type,
 )
 
@@ -269,7 +268,7 @@ def test_validate_launch_instance_type_accepts_valid_p_type():
 
 def test_validate_launch_instance_type_raises_for_empty_value(ec2_client):
     with pytest.raises(ValueError, match="instance type cannot be empty"):
-        validate_launch_instance_type("   ", ec2_client=ec2_client)
+        validate_launch_instance_type("", ec2_client=ec2_client)
 
 
 def test_validate_launch_instance_type_raises_for_non_g_vt_p_family(ec2_client):
@@ -293,61 +292,20 @@ def test_validate_launch_instance_type_raises_for_boto_error():
         validate_launch_instance_type("g5.xlarge", ec2_client=_BrokenEC2Client())
 
 
-def test_validate_launch_ami_accepts_available_image():
-    ec2_client = boto3.client("ec2", region_name="us-east-1")
-    with Stubber(ec2_client) as stubber:
-        stubber.add_response(
-            "describe_images",
-            {"Images": [{"ImageId": "ami-0ec16471888b25545", "State": "available"}]},
-            {"ImageIds": ["ami-0ec16471888b25545"]},
-        )
-        validate_launch_ami("ami-0ec16471888b25545", ec2_client=ec2_client)
-
-
-def test_validate_launch_ami_raises_for_empty_ami_id():
-    with pytest.raises(ValueError, match="ami id cannot be empty"):
-        validate_launch_ami("   ")
-
-
-def test_validate_launch_ami_raises_for_missing_image():
-    ec2_client = boto3.client("ec2", region_name="us-east-1")
-    with Stubber(ec2_client) as stubber:
-        stubber.add_client_error(
-            "describe_images",
-            service_error_code="InvalidAMIID.NotFound",
-            service_message="The image id does not exist",
-            expected_params={"ImageIds": ["ami-0doesnotexist0000"]},
-        )
-        with pytest.raises(RuntimeError, match="is unavailable in region"):
-            validate_launch_ami("ami-0doesnotexist0000", ec2_client=ec2_client)
-
-
-def test_validate_launch_ami_raises_for_non_available_state():
-    ec2_client = boto3.client("ec2", region_name="us-east-1")
-    with Stubber(ec2_client) as stubber:
-        stubber.add_response(
-            "describe_images",
-            {"Images": [{"ImageId": "ami-0ec16471888b25545", "State": "pending"}]},
-            {"ImageIds": ["ami-0ec16471888b25545"]},
-        )
-        with pytest.raises(RuntimeError, match="is unavailable in region"):
-            validate_launch_ami("ami-0ec16471888b25545", ec2_client=ec2_client)
-
-
 def test_launch_ec2_instance_returns_instance_id(ec2_client):
-    instance_id = launch_ec2_instance("G5.XLARGE", ec2_client=ec2_client)
+    instance_id = launch_ec2_instance("g5.xlarge", ec2_client=ec2_client)
     assert isinstance(instance_id, str)
     assert instance_id.startswith("i-")
 
 
 def test_launch_ec2_instance_raises_for_empty_instance_type(ec2_client):
     with pytest.raises(ValueError, match="instance type cannot be empty"):
-        launch_ec2_instance("   ", ec2_client=ec2_client)
+        launch_ec2_instance("", ec2_client=ec2_client)
 
 
 def test_launch_ec2_instance_raises_for_empty_ami_id(ec2_client):
     with pytest.raises(ValueError, match="ami id cannot be empty"):
-        launch_ec2_instance("g5.xlarge", ami_id="   ", ec2_client=ec2_client)
+        launch_ec2_instance("g5.xlarge", ami_id="", ec2_client=ec2_client)
 
 
 def test_launch_ec2_instance_raises_for_boto_error():
