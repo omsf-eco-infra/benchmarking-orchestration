@@ -285,9 +285,10 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
         self.s3_bucket = s3_bucket
         self.benchmark_kind = benchmark_kind
         self.mps_process_count = mps_process_count
-        self.benchmark_script_fs = benchmark_script_fs or GithubFileSystem(
+self.benchmark_script_fs = benchmark_script_fs or GithubFileSystem(
             org="OpenFreeEnergy",
             repo="performance_benchmarks",
+            sha="industry_benchmarks",
         )
         self.artifact_output = artifact_output or s3fs.S3FileSystem()
         self.benchmark_root = benchmark_root.rstrip("/")
