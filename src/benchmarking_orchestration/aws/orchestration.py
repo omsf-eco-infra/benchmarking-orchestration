@@ -67,7 +67,7 @@ def _validate_expected_ami(task_ami_id: str, expected_ami_id: str | None) -> Non
         )
 
 
-def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
+def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str, region: str) -> None:
     """Wait until On-Demand G/VT quota can accommodate a launch.
 
     Parameters
@@ -76,10 +76,12 @@ def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
         Launch task identifier.
     instance_type : str
         EC2 instance type requested by the task.
+    region : str
+        AWS region containing the requested capacity.
     """
-    needed_vcpus = _get_instance_type_vcpu_count(instance_type)
-    quota = _get_ondemand_g_vcpu_quota()
-    used = _get_ondemand_g_vcpus_used()
+    needed_vcpus = _get_instance_type_vcpu_count(instance_type, region=region)
+    quota = _get_ondemand_g_vcpu_quota(region=region)
+    used = _get_ondemand_g_vcpus_used(region=region)
     available = max(quota - used - _WIGGLE_ROOM, 0)
     if needed_vcpus <= available:
         return
@@ -91,8 +93,8 @@ def _wait_for_ondemand_g_vcpu_quota(task: str, instance_type: str) -> None:
     )
     while needed_vcpus > available:
         _time.sleep(_CAPACITY_RETRY_SLEEP_SECONDS)
-        quota = _get_ondemand_g_vcpu_quota()
-        used = _get_ondemand_g_vcpus_used()
+        quota = _get_ondemand_g_vcpu_quota(region=region)
+        used = _get_ondemand_g_vcpus_used(region=region)
         available = max(quota - used - _WIGGLE_ROOM, 0)
 
 
@@ -152,7 +154,8 @@ def _launch_with_capacity_retry(
         Launched EC2 instance identifier.
     """
     while True:
-        _wait_for_ondemand_g_vcpu_quota(task, instance_type)
+        if not instance_type.startswith("p"):
+            _wait_for_ondemand_g_vcpu_quota(task, instance_type, region)
         try:
             return _launch_ec2_instance(
                 instance_type,

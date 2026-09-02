@@ -253,17 +253,23 @@ def test_process_launch_task_marks_launch_failure(monkeypatch):
 
 
 def test_process_launch_task_retries_capacity(monkeypatch):
+    """Retry G/VT launches after EC2 reports insufficient capacity."""
     task_db = _FakeTaskDB()
     task = _launch_task()
     launches = []
     sleeps = []
-    monkeypatch.setattr(orchestration, "_get_instance_type_vcpu_count", lambda _type: 4)
+    quota_regions = []
+    monkeypatch.setattr(
+        orchestration,
+        "_get_instance_type_vcpu_count",
+        lambda _type, region: 4,
+    )
     monkeypatch.setattr(
         orchestration,
         "_get_ondemand_g_vcpu_quota",
-        lambda: orchestration._WIGGLE_ROOM + 4,
+        lambda region: quota_regions.append(region) or orchestration._WIGGLE_ROOM + 4,
     )
-    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpus_used", lambda: 0)
+    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpus_used", lambda region: 0)
 
     def _launch(*_args, **_kwargs):
         launches.append(1)
@@ -278,8 +284,67 @@ def test_process_launch_task_retries_capacity(monkeypatch):
 
     assert process_aws_launch_task(task_db, task, retry_for_capacity=True) == "i-123"
     assert len(launches) == 2
+    assert quota_regions == ["us-east-1", "us-east-1"]
     assert sleeps == [orchestration._CAPACITY_RETRY_SLEEP_SECONDS]
     assert task_db.mark_calls == [{"taskid": task, "success": True}]
+
+
+def test_quota_wait_uses_task_region_for_recheck(monkeypatch):
+    """Forward the task region to every quota preflight lookup."""
+    task_db = _FakeTaskDB()
+    task = _launch_task().replace("us-east-1:", "eu-west-1:", 1)
+    vcpu_calls = []
+    quota_calls = []
+    usage_calls = []
+    quota_values = iter(
+        [orchestration._WIGGLE_ROOM + 3, orchestration._WIGGLE_ROOM + 4]
+    )
+    sleeps = []
+    monkeypatch.setattr(
+        orchestration,
+        "_get_instance_type_vcpu_count",
+        lambda instance_type, region: vcpu_calls.append((instance_type, region)) or 4,
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_get_ondemand_g_vcpu_quota",
+        lambda region: quota_calls.append(region) or next(quota_values),
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_get_ondemand_g_vcpus_used",
+        lambda region: usage_calls.append(region) or 0,
+    )
+    monkeypatch.setattr(
+        orchestration, "_launch_ec2_instance", lambda *_args, **_kwargs: "i-123"
+    )
+    monkeypatch.setattr(
+        orchestration._time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
+
+    assert process_aws_launch_task(task_db, task, retry_for_capacity=True) == "i-123"
+    assert vcpu_calls == [("g5.xlarge", "eu-west-1")]
+    assert quota_calls == ["eu-west-1", "eu-west-1"]
+    assert usage_calls == ["eu-west-1", "eu-west-1"]
+    assert sleeps == [orchestration._CAPACITY_RETRY_SLEEP_SECONDS]
+
+
+def test_p_launch_skips_g_vcpu_quota_preflight(monkeypatch):
+    """Launch supported P instances without querying the G/VT quota pool."""
+    task_db = _FakeTaskDB()
+    task = _launch_task().replace(":g5.xlarge:", ":p4d.24xlarge:", 1)
+
+    def _unexpected(*_args, **_kwargs):
+        """Fail if a G/VT quota helper is queried for a P launch."""
+        raise AssertionError("G/VT quota preflight queried for P instance")
+
+    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpu_quota", _unexpected)
+    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpus_used", _unexpected)
+    monkeypatch.setattr(
+        orchestration, "_launch_ec2_instance", lambda *_args, **_kwargs: "i-123"
+    )
+
+    assert process_aws_launch_task(task_db, task, retry_for_capacity=True) == "i-123"
 
 
 def test_process_benchmark_task_runs_and_marks_success(monkeypatch):
