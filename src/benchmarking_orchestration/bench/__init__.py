@@ -24,7 +24,7 @@ from benchmarking_orchestration.aws.info import MetadataService
 from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
 
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
-_RESULT_MANIFEST_SCHEMA_VERSION = 4
+_RESULT_MANIFEST_SCHEMA_VERSION = 5
 
 
 def _build_result_s3_prefix(task_id: str, run_started_at: datetime) -> str:

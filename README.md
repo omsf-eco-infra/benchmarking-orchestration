@@ -56,6 +56,20 @@ Each run includes:
 - `exception_traceback.log` when execution fails
 - `manifest.json`
 
+### Result manifest schema
+
+New manifests use schema version 5. Consumers must select a v5 parser rather
+than treating these manifests as v4. Compared with v4:
+
+- the `input`, `output`, and `logs` sections are removed; artifact locations
+  follow the directories listed above under the manifest's `s3_prefix`;
+- `execution` contains `success` and `error_message`, but no longer includes
+  `error_type`.
+
+The top-level `benchmark_kind`, `mps_process_count`, `s3_bucket`, `s3_prefix`,
+and `timestamps` fields remain. AWS instance metadata fields may be present
+when the EC2 metadata service is available.
+
 ## Requirements
 
 - `pixi`

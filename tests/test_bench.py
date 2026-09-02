@@ -63,8 +63,10 @@ def test_benchmark_stages_and_uploads_via_fsspec(tmp_path: Path) -> None:
     keys = artifacts.find("bucket")
     output_key = next(key for key in keys if key.endswith("/output/md_benchmark.out"))
     manifest_key = next(key for key in keys if key.endswith("/manifest.json"))
+    manifest = json.loads(artifacts.cat(manifest_key))
     assert json.loads(artifacts.cat(output_key)) == {"system_a": 42.0}
-    assert json.loads(artifacts.cat(manifest_key))["execution"]["success"] is True
+    assert manifest["schema_version"] == 5
+    assert manifest["execution"] == {"success": True, "error_message": None}
 
 
 def test_aggregate_child_outputs_sums_numeric_values(tmp_path: Path) -> None:
