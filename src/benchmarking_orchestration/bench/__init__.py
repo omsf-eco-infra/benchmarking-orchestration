@@ -166,6 +166,26 @@ def _aggregate_child_outputs(
     )
 
 
+def _combine_text_files(destination: Path, source_paths: list[Path]) -> None:
+    """Combine labeled child logs into one artifact.
+
+    Parameters
+    ----------
+    destination : Path
+        Output log path.
+    source_paths : list[Path]
+        Child log paths in process order.
+    """
+    parts = []
+    for source_path in source_paths:
+        if source_path.exists():
+            content = source_path.read_text(encoding="utf-8")
+            parts.append(f"===== {source_path.name} =====\n{content}")
+            if not content.endswith("\n"):
+                parts.append("\n")
+    destination.write_text("".join(parts), encoding="utf-8")
+
+
 def _run_benchmark_subprocess_entrypoint(
     benchmark_dir: str,
     benchmark_kind: str,
@@ -199,12 +219,19 @@ def _run_benchmark_subprocess_entrypoint(
     int
         Zero on success, otherwise one.
     """
-    command, _name, _module = _resolve_benchmark_runner(
-        Path(benchmark_dir), _normalize_benchmark_kind(benchmark_kind)
-    )
-    stdout, stderr, error, trace = _invoke_benchmark_command(
-        command, Path(input_file), Path(output_file)
-    )
+    stdout = stderr = ""
+    error = None
+    trace = None
+    try:
+        command, _name, _module = _resolve_benchmark_runner(
+            Path(benchmark_dir), _normalize_benchmark_kind(benchmark_kind)
+        )
+        stdout, stderr, error, trace = _invoke_benchmark_command(
+            command, Path(input_file), Path(output_file)
+        )
+    except Exception as exc:
+        error = exc
+        trace = traceback.format_exc()
     Path(stdout_log).write_text(stdout, encoding="utf-8")
     Path(stderr_log).write_text(stderr, encoding="utf-8")
     if trace:
@@ -307,7 +334,7 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
             else:
                 children = workspace / "children"
                 children.mkdir()
-                processes: list[tuple[subprocess.Popen[str], Path]] = []
+                processes: list[tuple[subprocess.Popen[bytes], Path]] = []
                 for index in range(self.mps_process_count):
                     child_output = children / f"{output_file.stem}.process-{index}.out"
                     processes.append(
@@ -337,18 +364,41 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
                 error = (
                     RuntimeError("A benchmark subprocess failed.") if failed else None
                 )
-                trace = str(error) if error else None
-                stdout_log.write_text("", encoding="utf-8")
-                stderr_log.write_text("", encoding="utf-8")
+                _combine_text_files(
+                    stdout_log,
+                    [
+                        children / f"stdout.process-{index}.log"
+                        for index in range(self.mps_process_count)
+                    ],
+                )
+                _combine_text_files(
+                    stderr_log,
+                    [
+                        children / f"stderr.process-{index}.log"
+                        for index in range(self.mps_process_count)
+                    ],
+                )
+                child_exception_logs = [
+                    children / f"exception_traceback.process-{index}.log"
+                    for index in range(self.mps_process_count)
+                ]
+                if any(path.exists() for path in child_exception_logs):
+                    _combine_text_files(exception_log, child_exception_logs)
                 if error is None:
-                    _aggregate_child_outputs(
-                        None,
-                        [output for _process, output in processes],
-                        output_file,
-                        self.benchmark_kind,
-                    )
-                else:
-                    exception_log.write_text(trace, encoding="utf-8")
+                    try:
+                        _aggregate_child_outputs(
+                            None,
+                            [output for _process, output in processes],
+                            output_file,
+                            self.benchmark_kind,
+                        )
+                    except Exception as exc:
+                        error = exc
+                        exception_log.write_text(
+                            traceback.format_exc(), encoding="utf-8"
+                        )
+                elif not exception_log.exists() or not exception_log.stat().st_size:
+                    exception_log.write_text(str(error), encoding="utf-8")
 
             if error is None and not output_file.exists():
                 error = RuntimeError("Benchmark did not produce an output file.")
