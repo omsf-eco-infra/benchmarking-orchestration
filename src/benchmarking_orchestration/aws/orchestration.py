@@ -152,6 +152,11 @@ def _launch_with_capacity_retry(
     -------
     str
         Launched EC2 instance identifier.
+
+    Notes
+    -----
+    Capacity failures retry indefinitely. Other AWS errors, including expired
+    SSO credentials, stop the loop so the user can intervene and reauthenticate.
     """
     while True:
         if not instance_type.startswith("p"):

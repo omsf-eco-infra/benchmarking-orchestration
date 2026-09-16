@@ -167,6 +167,8 @@ pixi run python -m benchmarking_orchestration launch aws
 
 When `AWS_BENCHMARK_AMI_ID` is set, queued launch tasks must match that approved AMI or the launch is rejected.
 
+With `launch aws --loop`, quota and EC2 capacity failures retry indefinitely every 15 minutes. Other AWS errors, including expired SSO credentials, stop the loop so the user can intervene and reauthenticate.
+
 Run a benchmark worker locally for a capability:
 
 ```bash
