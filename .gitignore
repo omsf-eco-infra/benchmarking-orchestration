@@ -10,4 +10,4 @@ analysis/layouts
 .codex
 .pi
 .env.schema
-
+.DS_Store
