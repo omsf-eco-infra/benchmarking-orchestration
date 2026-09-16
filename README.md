@@ -39,6 +39,10 @@ The top-level groups are:
 - Runs benchmark tasks by worker capability (`g3`, `g4-dn`, `g5`, `g6`, `g6-e`, `p`, `vt1`).
 - Uploads benchmark inputs, outputs, logs, and a manifest to S3.
 
+### MPS assumptions
+
+`AWSOpenFEBenchmark` runs the requested number of MPS processes with the same benchmark kind and input, then sums their outputs. This measures price/performance throughput; it does not distribute distinct scientific tasks or provide independent validation runs. Workloads that require different inputs per process should implement a custom `AbstractBenchmark`.
+
 ### Result handling
 
 Benchmark workers upload artifacts to:
