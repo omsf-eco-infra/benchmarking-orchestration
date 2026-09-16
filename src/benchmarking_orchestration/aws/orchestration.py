@@ -316,8 +316,8 @@ def process_aws_launch_task(
             if cloud_init_b64 is not None
             else None
         )
-        instance_id = (
-            _launch_with_capacity_retry(
+        if retry_for_capacity:
+            instance_id = _launch_with_capacity_retry(
                 task,
                 instance_type,
                 ami_id,
@@ -326,8 +326,8 @@ def process_aws_launch_task(
                 key_name,
                 instance_profile_name,
             )
-            if retry_for_capacity
-            else _launch_ec2_instance(
+        else:
+            instance_id = _launch_ec2_instance(
                 instance_type,
                 ami_id=ami_id,
                 region=region,
@@ -335,7 +335,6 @@ def process_aws_launch_task(
                 key_name=key_name,
                 instance_profile_name=instance_profile_name,
             )
-        )
     except Exception:
         task_db.mark_task_completed(task, success=False)
         raise
