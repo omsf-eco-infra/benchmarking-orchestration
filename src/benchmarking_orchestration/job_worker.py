@@ -291,8 +291,8 @@ def run_job_worker(
     RuntimeError
         If benchmark execution or heartbeat persistence fails.
     """
-    if heartbeat_interval_seconds <= 0:
-        raise ValueError("heartbeat_interval_seconds must be greater than zero.")
+    if not 0 < heartbeat_interval_seconds < float("inf"):
+        raise ValueError("heartbeat_interval_seconds must be greater than zero and finite.")
     job_directory = job_directory.resolve()
     if not job_directory.is_dir():
         raise ValueError("job_directory must identify an existing directory.")
