@@ -169,6 +169,22 @@ Process one queued launch task:
 pixi run python -m benchmarking_orchestration launch aws
 ```
 
+Run this on the machine that queued the tasks (typically your local machine),
+or any host with access to the same task database and AWS credentials. It
+checks out a launch task, starts an EC2 instance, and records the result. No
+separate management EC2 instance is required. When queued with the example
+`--cloud-init-file cloud_init.sh`, the launched instance starts the benchmark
+worker, which checks out its dependent task from the same database and uploads
+results to S3.
+
+The launcher needs `ec2:DescribeImages`, `ec2:DescribeInstanceTypes`,
+`ec2:RunInstances`, and `ec2:DescribeInstances`. With `--loop`, its quota
+preflight also needs `servicequotas:ListServiceQuotas`; attaching an instance
+profile requires `iam:PassRole` for that role. The benchmark instance profile
+needs S3 write access (at least `s3:PutObject`) to the results bucket; it does
+not need EC2 launch permissions. Both processes need access to the shared task
+database (the example cloud-init script uses Turso).
+
 When `AWS_BENCHMARK_AMI_ID` is set, queued launch tasks must match that approved AMI or the launch is rejected.
 
 With `launch aws --loop`, quota and EC2 capacity failures retry indefinitely every 15 minutes. Other AWS errors, including expired SSO credentials, stop the loop so the user can intervene and reauthenticate.
@@ -206,10 +222,6 @@ When you pass `--cloud-init-file`, the file is rendered as a template using envi
 - `GPU_CAPABILITY`
 - `S3_BUCKET`
 - lowercase Turso aliases (`turso_database_url`, `turso_auth_token`)
-
-## Docker
-
-The included `Dockerfile` builds a CUDA-enabled Pixi image, installs the `bench` environment, and clones `performance_benchmarks` into `/app/performance_benchmarks`.
 
 ## Current limitations / notable behavior
 
