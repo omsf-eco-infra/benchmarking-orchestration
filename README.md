@@ -188,6 +188,8 @@ database (the example cloud-init script uses Turso).
 When `AWS_BENCHMARK_AMI_ID` is set, queued launch tasks must match that approved AMI or the launch is rejected.
 
 With `launch aws --loop`, quota and EC2 capacity failures retry indefinitely every 15 minutes. Other AWS errors, including expired SSO credentials, stop the loop so the user can intervene and reauthenticate.
+P instances use the regional On-Demand P vCPU quota instead of the G/VT quota;
+the P preflight allows a launch that exactly fills its quota.
 
 Run a benchmark worker locally for a capability:
 

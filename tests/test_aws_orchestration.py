@@ -329,10 +329,13 @@ def test_quota_wait_uses_task_region_for_recheck(monkeypatch):
     assert sleeps == [orchestration._CAPACITY_RETRY_SLEEP_SECONDS]
 
 
-def test_p_launch_skips_g_vcpu_quota_preflight(monkeypatch):
-    """Launch supported P instances without querying the G/VT quota pool."""
+def test_p_launch_waits_for_p_vcpu_quota(monkeypatch):
+    """Wait on the P pool in the task region without reserving extra vCPUs."""
     task_db = _FakeTaskDB()
-    task = _launch_task().replace(":g5.xlarge:", ":p4d.24xlarge:", 1)
+    task = _launch_task().replace("us-east-1:g5.xlarge:", "eu-west-1:p4d.24xlarge:", 1)
+    calls = []
+    remaining_quota = iter([96, 96])
+    used_vcpus = iter([96, 0])
 
     def _unexpected(*_args, **_kwargs):
         """Fail if a G/VT quota helper is queried for a P launch."""
@@ -341,10 +344,36 @@ def test_p_launch_skips_g_vcpu_quota_preflight(monkeypatch):
     monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpu_quota", _unexpected)
     monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpus_used", _unexpected)
     monkeypatch.setattr(
-        orchestration, "_launch_ec2_instance", lambda *_args, **_kwargs: "i-123"
+        orchestration, "_get_instance_type_vcpu_count", lambda _type, region: 96
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_get_ondemand_p_vcpu_quota",
+        lambda region: calls.append(("quota", region)) or next(remaining_quota),
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_get_ondemand_p_vcpus_used",
+        lambda region: calls.append(("used", region)) or next(used_vcpus),
+    )
+    monkeypatch.setattr(
+        orchestration._time, "sleep", lambda seconds: calls.append(("sleep", seconds))
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_launch_ec2_instance",
+        lambda *_args, **_kwargs: calls.append(("launch", "eu-west-1")) or "i-123",
     )
 
     assert process_aws_launch_task(task_db, task, retry_for_capacity=True) == "i-123"
+    assert calls == [
+        ("quota", "eu-west-1"),
+        ("used", "eu-west-1"),
+        ("sleep", orchestration._CAPACITY_RETRY_SLEEP_SECONDS),
+        ("quota", "eu-west-1"),
+        ("used", "eu-west-1"),
+        ("launch", "eu-west-1"),
+    ]
 
 
 def test_process_benchmark_task_runs_and_marks_success(monkeypatch):

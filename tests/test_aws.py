@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import boto3
 import pytest
 from botocore.exceptions import EndpointConnectionError, WaiterError
@@ -12,6 +14,8 @@ from benchmarking_orchestration.aws import (
     _resolve_vcpus_by_instance_type,
     get_ondemand_g_vcpu_quota,
     get_ondemand_g_vcpus_used,
+    get_ondemand_p_vcpu_quota,
+    get_ondemand_p_vcpus_used,
     launch_ec2_instance,
     validate_launch_instance_type,
 )
@@ -209,6 +213,71 @@ def test_get_ondemand_g_vcpu_quota_raises_when_value_is_missing(service_quotas_c
         )
         with pytest.raises(RuntimeError, match="Quota value missing"):
             get_ondemand_g_vcpu_quota(service_quotas_client=service_quotas_client)
+
+
+def test_get_ondemand_p_vcpu_quota_selects_p_pool(service_quotas_client):
+    """Use the P quota rather than the G/VT pool."""
+    with Stubber(service_quotas_client) as stubber:
+        stubber.add_response(
+            "list_service_quotas",
+            {
+                "Quotas": [
+                    {
+                        "QuotaName": "Running On-Demand G and VT instances",
+                        "Value": 200.0,
+                    },
+                    {"QuotaName": "Running On-Demand P instances", "Value": 96.0},
+                ]
+            },
+            {"ServiceCode": "ec2"},
+        )
+        assert (
+            get_ondemand_p_vcpu_quota(service_quotas_client=service_quotas_client) == 96
+        )
+
+
+def test_get_ondemand_p_vcpu_quota_missing_fails(service_quotas_client):
+    """Do not wait on a quota that AWS did not return."""
+    with Stubber(service_quotas_client) as stubber:
+        stubber.add_response(
+            "list_service_quotas", {"Quotas": []}, {"ServiceCode": "ec2"}
+        )
+        with pytest.raises(RuntimeError, match="No EC2 On-Demand P instance quota"):
+            get_ondemand_p_vcpu_quota(service_quotas_client=service_quotas_client)
+
+
+def test_get_ondemand_p_vcpus_used_excludes_spot_and_other_families():
+    """Count only non-Spot P instances against the P vCPU pool."""
+    ec2_client = Mock()
+    ec2_client.get_paginator.return_value.paginate.return_value = [
+        {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {"InstanceType": "p4d.24xlarge"},
+                        {"InstanceType": "p5.48xlarge"},
+                        {"InstanceType": "p4d.24xlarge", "InstanceLifecycle": "spot"},
+                        {"InstanceType": "g5.xlarge"},
+                    ]
+                }
+            ]
+        }
+    ]
+    ec2_client.describe_instance_types.return_value = {
+        "InstanceTypes": [
+            {"InstanceType": "p4d.24xlarge", "VCpuInfo": {"DefaultVCpus": 96}},
+            {"InstanceType": "p5.48xlarge", "VCpuInfo": {"DefaultVCpus": 192}},
+        ]
+    }
+    assert get_ondemand_p_vcpus_used(ec2_client=ec2_client) == 288
+    ec2_client.get_paginator.return_value.paginate.assert_called_once_with(
+        Filters=[
+            {
+                "Name": "instance-state-name",
+                "Values": ["running", "stopping", "pending"],
+            }
+        ]
+    )
 
 
 def test_resolve_vcpus_by_instance_type(ec2_client):

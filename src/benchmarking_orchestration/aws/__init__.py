@@ -1,4 +1,4 @@
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError, WaiterError
@@ -93,6 +93,28 @@ def _extract_running_ondemand_g_instance_types(
     list[str]
         Matching instance types for running, non-Spot G/VT instances.
     """
+    return _extract_running_ondemand_instance_types(
+        describe_instances_pages, _is_ondemand_g_or_vt_instance_type
+    )
+
+
+def _extract_running_ondemand_instance_types(
+    describe_instances_pages: Iterable[dict[str, Any]], matches: Callable[[str], bool]
+) -> list[str]:
+    """Extract non-Spot instance types in the requested quota pool.
+
+    Parameters
+    ----------
+    describe_instances_pages : Iterable[dict[str, Any]]
+        Paginated EC2 instance responses.
+    matches : Callable[[str], bool]
+        Predicate selecting instance types in the quota pool.
+
+    Returns
+    -------
+    list[str]
+        Matching non-Spot instance types.
+    """
     instance_types = []
     for page in describe_instances_pages:
         for reservation in page.get("Reservations", []):
@@ -101,7 +123,7 @@ def _extract_running_ondemand_g_instance_types(
                 instance_lifecycle = instance.get("InstanceLifecycle")
                 if instance_lifecycle == "spot":
                     continue
-                if _is_ondemand_g_or_vt_instance_type(instance_type):
+                if matches(instance_type):
                     instance_types.append(instance_type)
     return instance_types
 
@@ -472,6 +494,42 @@ def get_ondemand_g_vcpu_quota(
     )
 
 
+def get_ondemand_p_vcpu_quota(
+    region: str = "us-east-1", service_quotas_client: Any = None
+) -> int:
+    """Return the On-Demand P vCPU quota for an AWS region.
+
+    Parameters
+    ----------
+    region : str, default="us-east-1"
+        AWS region to query.
+    service_quotas_client : Any, optional
+        Boto3 Service Quotas client or compatible test double.
+
+    Returns
+    -------
+    int
+        Configured On-Demand P vCPU quota.
+
+    Raises
+    ------
+    RuntimeError
+        If the quota is missing or has no value.
+    """
+    client = service_quotas_client or boto3.client("service-quotas", region_name=region)
+    for page in client.get_paginator("list_service_quotas").paginate(ServiceCode="ec2"):
+        for quota in page.get("Quotas", []):
+            if quota.get("QuotaName", "").lower() == "running on-demand p instances":
+                value = quota.get("Value")
+                if value is None:
+                    raise RuntimeError(
+                        f"Quota value missing for 'Running On-Demand P instances' in region {region}."
+                    )
+                return int(value)
+
+    raise RuntimeError(f"No EC2 On-Demand P instance quota found in region {region}.")
+
+
 def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None) -> int:
     """Return running On-Demand G/VT vCPUs currently in use.
 
@@ -494,6 +552,50 @@ def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None)
         If vCPU metadata cannot be resolved for one or more discovered
         instance types.
     """
+    return _get_ondemand_vcpus_used(
+        region, ec2_client, _is_ondemand_g_or_vt_instance_type
+    )
+
+
+def get_ondemand_p_vcpus_used(region: str = "us-east-1", ec2_client: Any = None) -> int:
+    """Return On-Demand P vCPUs currently in use in a region.
+
+    Parameters
+    ----------
+    region : str, default="us-east-1"
+        AWS region to query.
+    ec2_client : Any, optional
+        Boto3 EC2 client or compatible test double.
+
+    Returns
+    -------
+    int
+        Non-Spot P-family vCPUs in use.
+    """
+    return _get_ondemand_vcpus_used(
+        region, ec2_client, lambda instance_type: instance_type.lower().startswith("p")
+    )
+
+
+def _get_ondemand_vcpus_used(
+    region: str, ec2_client: Any, matches: Callable[[str], bool]
+) -> int:
+    """Count vCPUs in the selected On-Demand quota pool.
+
+    Parameters
+    ----------
+    region : str
+        AWS region to query.
+    ec2_client : Any
+        EC2 client or ``None`` to create one.
+    matches : Callable[[str], bool]
+        Predicate selecting instance types in the quota pool.
+
+    Returns
+    -------
+    int
+        vCPUs currently in use.
+    """
     ec2 = ec2_client or boto3.client("ec2", region_name=region)
 
     paginator = ec2.get_paginator("describe_instances")
@@ -501,11 +603,11 @@ def get_ondemand_g_vcpus_used(region: str = "us-east-1", ec2_client: Any = None)
         Filters=[
             {
                 "Name": "instance-state-name",
-                "Values": ["running", "stopping", "pending", "stopped"],
+                "Values": ["running", "stopping", "pending"],
             }
         ]
     )
-    instance_types = _extract_running_ondemand_g_instance_types(pages)
+    instance_types = _extract_running_ondemand_instance_types(pages, matches)
 
     if not instance_types:
         return 0
