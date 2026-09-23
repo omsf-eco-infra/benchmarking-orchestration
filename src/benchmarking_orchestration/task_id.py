@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from .benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
-from .providers.aws_provider import DEFAULT_LAUNCH_AMI_ID
+from benchmarking_orchestration.aws import DEFAULT_LAUNCH_AMI_ID
 
 
 def _build_task_id(
