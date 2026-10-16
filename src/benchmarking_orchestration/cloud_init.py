@@ -2,36 +2,9 @@ from __future__ import annotations
 
 import base64
 import binascii
-import os
+from collections.abc import Mapping
 from pathlib import Path
 from string import Template
-
-import click
-
-from .normalization import _normalize_required_value
-
-
-def _normalize_cloud_init_file_path(cloud_init_file: str | None) -> str | None:
-    """Normalize an optional cloud-init file path.
-
-    Parameters
-    ----------
-    cloud_init_file : str, optional
-        Raw cloud-init file path from the CLI.
-
-    Returns
-    -------
-    str | None
-        Stripped file path, or ``None`` when no path is provided.
-
-    Raises
-    ------
-    click.BadParameter
-        If a value is provided but is empty after stripping.
-    """
-    if cloud_init_file is None:
-        return None
-    return _normalize_required_value("cloud init file", cloud_init_file)
 
 
 class _CloudInitTemplate(Template):
@@ -61,18 +34,18 @@ def _fill_cloud_init_template(cloud_init_file: Path, **kwargs) -> str:
 
     Raises
     ------
-    click.ClickException
+    ValueError
         If the file cannot be read as UTF-8 text, template syntax is invalid,
         or required placeholders are missing from ``kwargs``.
     """
     try:
         template = cloud_init_file.read_text(encoding="utf-8")
     except OSError as exc:
-        raise click.ClickException(
+        raise ValueError(
             f"Unable to read cloud-init file '{cloud_init_file}': {exc}"
         ) from exc
     except UnicodeDecodeError as exc:
-        raise click.ClickException(
+        raise ValueError(
             f"Cloud-init file '{cloud_init_file}' must be UTF-8 text."
         ) from exc
 
@@ -81,58 +54,50 @@ def _fill_cloud_init_template(cloud_init_file: Path, **kwargs) -> str:
         return parsed.substitute(**kwargs)
     except KeyError as exc:
         missing_key = exc.args[0]
-        raise click.ClickException(
+        raise ValueError(
             "Missing template value "
             f"'{missing_key}' for cloud-init file '{cloud_init_file}'."
         ) from exc
     except ValueError as exc:
-        raise click.ClickException(
+        raise ValueError(
             f"Invalid cloud-init template in '{cloud_init_file}': {exc}"
         ) from exc
 
 
 def _read_cloud_init_file_as_base64(
-    cloud_init_file: str | None,
-    extra_vars: dict[str, str] | None = None,
+    cloud_init_file: str | Path | None,
+    template_values: Mapping[str, str] | None = None,
 ) -> str | None:
-    """Read a cloud-init file and return a base64 payload.
+    """Render a cloud-init file with explicit values and return base64.
 
     Parameters
     ----------
-    cloud_init_file : str, optional
-        Path to a cloud-init file.
-    extra_vars : dict, optional
-        Additional template variable overrides merged on top of the
-        environment-variable defaults (e.g. ``{"GPU_CAPABILITY": "g4-dn"}``).
+    cloud_init_file : str | Path | None
+        Path to a cloud-init template, or ``None``.
+    template_values : Mapping[str, str] | None, optional
+        Explicit template placeholder values.
 
     Returns
     -------
     str | None
-        Base64-encoded file contents when provided, otherwise ``None``.
+        Base64-encoded rendered contents, or ``None`` when no path is supplied.
 
     Raises
     ------
-    click.ClickException
-        If file reading fails or the file is empty.
+    ValueError
+        If file reading, rendering, or encoding fails, or the file is empty.
     """
-    normalized_path = _normalize_cloud_init_file_path(cloud_init_file)
-    if normalized_path is None:
+    if cloud_init_file is None:
         return None
 
-    file_path = Path(normalized_path)
-    template_values = dict(os.environ)
-    if "TURSO_DATABASE_URL" in template_values:
-        template_values["turso_database_url"] = template_values["TURSO_DATABASE_URL"]
-    if "TURSO_AUTH_TOKEN" in template_values:
-        template_values["turso_auth_token"] = template_values["TURSO_AUTH_TOKEN"]
-    if extra_vars:
-        template_values.update(extra_vars)
-
-    rendered_cloud_init = _fill_cloud_init_template(file_path, **template_values)
+    file_path = Path(cloud_init_file)
+    rendered_cloud_init = _fill_cloud_init_template(
+        file_path, **dict(template_values or {})
+    )
     file_bytes = rendered_cloud_init.encode("utf-8")
 
     if not file_bytes:
-        raise click.ClickException(f"Cloud-init file '{normalized_path}' is empty.")
+        raise ValueError(f"Cloud-init file '{cloud_init_file}' is empty.")
 
     return base64.b64encode(file_bytes).decode("ascii")
 

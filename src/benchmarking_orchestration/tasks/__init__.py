@@ -1,5 +1,5 @@
 import logging
-from typing import Iterable, Optional
+from typing import Iterable
 
 import exorcist
 import sqlalchemy as sqla
@@ -77,20 +77,6 @@ class TaskStatusDB(exorcist.TaskStatusDB):
             .limit(1)
         )
         return subq
-
-    def peek_task_with_capability(self, capability: str) -> Optional[str]:
-        _logger.info("Peeking task")
-        select = self._select_task_with_capability(capability)
-
-        with self.engine.begin() as conn:
-            result = list(conn.execute(select))
-
-        if len(result) == 1:
-            taskid = result[0][0]
-            return taskid
-        elif len(result) == 0:
-            _logger.info("Unable to select an available task")
-            return None  # skip extra logging
 
     def check_out_task_with_capability(self, capability: str):
         _logger.info("Checking out task")

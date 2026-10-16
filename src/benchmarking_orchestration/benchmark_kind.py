@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-import click
-
 
 class BenchmarkKind(StrEnum):
     """Supported benchmark workload kinds."""
@@ -52,27 +50,3 @@ def _normalize_benchmark_kind(raw_value: str) -> BenchmarkKind:
         raise ValueError(
             f"Unsupported benchmark kind '{raw_value}'. Supported kinds: {choices}."
         ) from exc
-
-
-def _parse_benchmark_kind(
-    _ctx: click.Context,
-    _param: click.Parameter,
-    value: str,
-) -> BenchmarkKind:
-    """Parse and normalize benchmark kind option value.
-
-    Parameters
-    ----------
-    _ctx : click.Context
-        Click context (unused).
-    _param : click.Parameter
-        Click parameter metadata (unused).
-    value : str
-        Selected benchmark kind value.
-
-    Returns
-    -------
-    BenchmarkKind
-        Parsed benchmark kind enum value.
-    """
-    return BenchmarkKind(value.lower())
