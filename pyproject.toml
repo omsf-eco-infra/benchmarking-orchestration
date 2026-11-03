@@ -20,13 +20,13 @@ platforms = [
 
 [tool.pixi.pypi-dependencies]
 benchmarking_orchestration = { path = ".", editable = true }
-exorcist = {git = "https://github.com/OpenFreeEnergy/exorcist"}
 
 [tool.pixi.dependencies]
 cyclopts = ">=4.10.1"
 python = "==3.13" # sqlalchemy-libsql does not work on Python 3.14 in testing
 fsspec = ">=2026.6.0,<2027"
 s3fs = ">=2026.6.0,<2027"
+exorcist = ">=0.1.1,<0.2"
 
 [tool.pixi.feature.aws.dependencies]
 boto3 = ">=1.42.81,<2"
