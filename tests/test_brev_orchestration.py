@@ -122,7 +122,7 @@ class _FakeTransport:
                 (destination / "logs" / "stdout.log").write_text("", encoding="utf-8")
                 (destination / "logs" / "stderr.log").write_text("", encoding="utf-8")
                 payload = {
-                    "schema_version": 4,
+                    "schema_version": 5,
                     "benchmark_kind": benchmark_kind,
                     "mps_process_count": self.job_payload["mps_process_count"],
                     "execution": {"success": True, "error_message": None},
