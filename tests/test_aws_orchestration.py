@@ -14,7 +14,7 @@ from benchmarking_orchestration.aws import (
     process_aws_launch_task,
     queue_aws_tasks,
 )
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
 from benchmarking_orchestration.tasks import TaskStatusDB
 
 

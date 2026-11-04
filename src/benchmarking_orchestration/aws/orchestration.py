@@ -8,13 +8,16 @@ from pathlib import Path as _Path
 
 from exorcist.taskdb import _logger
 
-from .. import cloud_init as _cloud_init
-from .. import task_id as _task_id
-from ..benchmark_kind import BenchmarkKind as _BenchmarkKind
-from ..capabilities import (
+from benchmarking_orchestration_core import cloud_init as _cloud_init
+from benchmarking_orchestration_core import task_id as _task_id
+from benchmarking_orchestration_core.benchmark_kind import (
+    BenchmarkKind as _BenchmarkKind,
+)
+from benchmarking_orchestration_core.capabilities import (
     WorkerCapability as _WorkerCapability,
     _resolve_bench_worker_capability,
 )
+
 from ..tasks import TaskStatusDB as _TaskStatusDB
 from . import (
     get_instance_type_vcpu_count as _get_instance_type_vcpu_count,

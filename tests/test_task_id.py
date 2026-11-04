@@ -1,5 +1,5 @@
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
-from benchmarking_orchestration.task_id import (
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
+from benchmarking_orchestration_core.task_id import (
     _build_bench_task_id,
     _parse_bench_task_id,
     _parse_bench_task_metadata,

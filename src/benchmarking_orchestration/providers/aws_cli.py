@@ -7,15 +7,16 @@ from typing import Annotated, Callable, Optional
 
 from cyclopts import App, Parameter, validators
 
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
+from benchmarking_orchestration_core.capabilities import WorkerCapability
+from benchmarking_orchestration_core.task_id import _parse_bench_task_metadata
+
 from ..aws import DEFAULT_LAUNCH_AMI_ENV_VAR, get_launch_ami_details
 from ..aws.orchestration import (
     process_aws_benchmark_task,
     process_aws_launch_task,
     queue_aws_tasks,
 )
-from ..benchmark_kind import BenchmarkKind
-from ..capabilities import WorkerCapability
-from ..task_id import _parse_bench_task_metadata
 from .cli_protocol import Config, ProviderCLI
 
 

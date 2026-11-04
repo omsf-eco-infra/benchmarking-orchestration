@@ -3,13 +3,12 @@ from __future__ import annotations
 import uuid
 
 from .benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
-from benchmarking_orchestration.aws import DEFAULT_LAUNCH_AMI_ID
 
 
 def _build_task_id(
     region: str,
     instance_type: str,
-    ami_id: str = DEFAULT_LAUNCH_AMI_ID,
+    ami_id: str,
     cloud_init_b64: str | None = None,
 ) -> str:
     """Build a unique task identifier for EC2 launch orchestration.
@@ -20,7 +19,7 @@ def _build_task_id(
         AWS region where the launch should occur.
     instance_type : str
         Validated EC2 instance type.
-    ami_id : str, default=DEFAULT_LAUNCH_AMI_ID
+    ami_id : str
         AMI identifier to use for launch.
     cloud_init_b64 : str, optional
         Base64-encoded cloud-init payload to embed in task metadata.

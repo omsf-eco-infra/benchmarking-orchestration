@@ -20,6 +20,7 @@ platforms = [
 
 [tool.pixi.pypi-dependencies]
 benchmarking_orchestration = { path = ".", editable = true }
+benchmarking-orchestration-core = { path = "packages/core", editable = true }
 
 [tool.pixi.dependencies]
 cyclopts = ">=4.10.1"

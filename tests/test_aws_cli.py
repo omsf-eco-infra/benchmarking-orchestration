@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 import benchmarking_orchestration.providers.aws_cli as aws_cli_module
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
-from benchmarking_orchestration.capabilities import WorkerCapability
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
+from benchmarking_orchestration_core.capabilities import WorkerCapability
 from benchmarking_orchestration.providers.aws_cli import AwsCLI
 
 _BENCH_TASK = (

@@ -1,6 +1,6 @@
 import pytest
 
-from benchmarking_orchestration.capabilities import (
+from benchmarking_orchestration_core.capabilities import (
     WorkerCapability,
     _resolve_bench_worker_capability,
 )
