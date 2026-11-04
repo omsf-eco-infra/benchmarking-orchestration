@@ -2,6 +2,20 @@
 
 Practical guidance for coding agents working in this repository.
 
+## Package Layout
+- `packages/core/` is the `benchmarking-orchestration-core` distribution
+  (import name `benchmarking_orchestration_core`). It holds the dependency-free
+  contracts and shared value types: `AbstractBenchmark`, `BenchmarkKind`,
+  `WorkerCapability`, the task-ID format, and cloud-init rendering. It must not
+  import provider, CLI, or persistence dependencies.
+- `src/benchmarking_orchestration/` is the application distribution: CLI
+  (`commands`, `__main__`), providers (`ProviderCLI` + AWS), the AWS client and
+  orchestration, the task DB, and the benchmark runner. Its top-level
+  `__init__` is lazy, so importing the package must not require `boto3`.
+- `tests/test_boundaries.py` guards the isolation and lazy-import behavior.
+- The recommended split and its rationale are recorded in
+  `docs/monorepo-exploration.md`.
+
 ## Environment and Commands
 - Use `pixi` for all runs so dependencies resolve correctly (notably `exorcist` and `boto3`).
 - Install/sync env:
