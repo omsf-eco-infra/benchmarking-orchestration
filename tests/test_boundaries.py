@@ -46,7 +46,7 @@ def test_core_imports_without_provider_cli_or_db_dependencies():
         "assert set(core.__all__) == {'AbstractBenchmark', 'BenchmarkKind'}\n"
         "for module in pkgutil.walk_packages(core.__path__, core.__name__ + '.'):\n"
         "    importlib.import_module(module.name)\n"
-        "bad = {'benchmarking_aws', 'benchmarking_orchestration', 'boto3', "
+        "bad = {'benchmarking_aws', 'benchmarking_brev', 'benchmarking_orchestration', 'boto3', "
         "'fsspec', 's3fs', 'cyclopts', 'exorcist', 'sqlalchemy'}\n"
         "overlap = bad & set(sys.modules)\n"
         "assert not overlap, sorted(overlap)\n"
@@ -57,7 +57,9 @@ def test_core_imports_without_provider_cli_or_db_dependencies():
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("package", ["benchmarking_orchestration", "benchmarking_aws"])
+@pytest.mark.parametrize(
+    "package", ["benchmarking_orchestration", "benchmarking_aws", "benchmarking_brev"]
+)
 def test_package_import_does_not_pull_provider_dependencies(package):
     """Keep top-level imports independent of the AWS SDK."""
     code = (
@@ -80,6 +82,7 @@ def test_package_import_does_not_pull_provider_dependencies(package):
             "benchmarking_aws",
             {"benchmarking_orchestration_core", "boto3", "botocore", "requests"},
         ),
+        ("benchmarking_brev", {"benchmarking_orchestration_core"}),
     ],
 )
 def test_library_imports_follow_package_direction(package, dependencies):
@@ -123,6 +126,49 @@ def test_aws_primitives_do_not_import_the_application():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize("module", ["task_id", "transport", "readiness"])
+def test_brev_semantic_modules_are_not_in_core(module):
+    """Keep Brev primitives in their provider library.
+
+    Parameters
+    ----------
+    module : str
+        Brev-owned module name.
+    """
+    assert importlib.util.find_spec(f"benchmarking_orchestration_core.{module}") is None
+    assert importlib.util.find_spec(f"benchmarking_brev.{module}") is not None
+
+
+def test_brev_library_does_not_import_app_aws_or_database_dependencies():
+    """Import all Brev modules without loading another provider or the app."""
+    code = (
+        "import importlib, pkgutil, sys\n"
+        "import benchmarking_brev as brev\n"
+        "for module in pkgutil.walk_packages(brev.__path__, brev.__name__ + '.'):\n"
+        "    importlib.import_module(module.name)\n"
+        "bad = {'benchmarking_aws', 'benchmarking_orchestration', 'boto3', 'botocore', "
+        "'cyclopts', 'exorcist', 'sqlalchemy', 'fsspec', 's3fs'}\n"
+        "overlap = bad & set(sys.modules)\n"
+        "assert not overlap, sorted(overlap)\n"
+    )
+    result = _run_isolated(code)
+    assert result.returncode == 0, result.stderr
+
+
+def test_job_worker_import_does_not_load_controller_integrations():
+    """Keep provider and persistence integration out of the local worker."""
+    code = (
+        "import sys\n"
+        "import benchmarking_orchestration.job_worker\n"
+        "bad = {'benchmarking_aws', 'benchmarking_brev', 'exorcist', 'sqlalchemy', 'cyclopts', "
+        "'benchmarking_orchestration.tasks', 'benchmarking_orchestration.brev'}\n"
+        "overlap = bad & set(sys.modules)\n"
+        "assert not overlap, sorted(overlap)\n"
+    )
+    result = _run_isolated(code)
+    assert result.returncode == 0, result.stderr
+
+
 def test_create_app_registers_injected_providers():
     """Register injected adapters alongside the built-in AWS adapter."""
     seen: list[tuple[App, App, App]] = []
@@ -146,3 +192,7 @@ def test_create_app_registers_injected_providers():
     assert "aws" in list(app["create"])
     assert "aws" in list(app["launch"])
     assert "aws" in list(app["worker"])
+    assert "brev" in list(app["create"])
+    assert "brev" in list(app["launch"])
+    assert "brev" not in list(app["worker"])
+    assert "job" in list(app["worker"])

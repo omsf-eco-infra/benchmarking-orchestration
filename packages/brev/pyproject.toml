@@ -1,0 +1,11 @@
+[project]
+authors = [{name = "Ethan Holz", email = "ethan.holz@omsf.io"}]
+description = "Brev task formats, CLI transport, and readiness policy."
+name = "benchmarking-brev"
+requires-python = ">= 3.11"
+version = "0.1.0"
+dependencies = ["benchmarking-orchestration-core>=0.1.0,<0.2"]
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
