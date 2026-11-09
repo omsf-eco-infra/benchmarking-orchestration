@@ -248,10 +248,19 @@ When you pass `--cloud-init-file`, the file is rendered as a template using envi
 
 ## Development
 
-Run tests:
+Run all tests (library unit tests, app tests, and cross-package checks):
 
 ```bash
 pixi run --environment dev --clean-env test
+```
+
+Library unit tests live in `packages/core/tests/` and `packages/aws/tests/`.
+App tests and cross-package boundary/integration tests remain in root `tests/`.
+All suites share the same Pixi environment and CI command. To run one library:
+
+```bash
+pixi run --environment dev pytest packages/core/tests
+pixi run --environment dev pytest packages/aws/tests
 ```
 
 Format:

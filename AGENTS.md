@@ -30,8 +30,16 @@ Practical guidance for coding agents working in this repository.
   - `pixi run python -m benchmarking_orchestration`
 
 ## Testing
-- Run the full unit test suite:
+- Library unit tests live beside their packages: `packages/core/tests/` and
+  `packages/aws/tests/`. App tests and cross-package boundary/integration tests
+  remain in root `tests/`.
+- Root `pyproject.toml` configures discovery for all three test directories.
+  Keep one Pixi environment and one CI test command.
+- Run the full test suite:
   - `pixi run --environment dev --clean-env test`
+- Run one library suite:
+  - `pixi run --environment dev pytest packages/core/tests`
+  - `pixi run --environment dev pytest packages/aws/tests`
 
 ## Formatting
 - `pixi run --environment dev fmt`

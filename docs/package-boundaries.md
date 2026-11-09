@@ -61,7 +61,19 @@ core modules have no forwarding aliases, so AWS concepts cannot leak back into
 the core API. The application retains its lazy `WorkerCapability` export for
 existing app callers; that enum is owned by the AWS package.
 
+## Test ownership
+
+- `packages/core/tests/`: provider-neutral benchmark contract and workload kinds.
+- `packages/aws/tests/`: AWS client, task encoding, capability mapping, and
+  standalone launch policy.
+- Root `tests/`: app CLI, persistence and runner tests, plus cross-package
+  integration and boundary checks. AWS task orchestration tests stay here because
+  they exercise the application database and its integration with AWS.
+
 `tests/test_boundaries.py` checks the known semantic modules stay out of core,
 all library source imports obey dependency direction, and importing library
-modules does not pull in the application. Existing AWS tests exercise the moved
-client, task encoding, and capability mapping.
+modules does not pull in the application.
+
+Root `pyproject.toml` explicitly configures all three test directories. The
+existing `pixi run --environment dev --clean-env test` command runs everything;
+package-local tests do not introduce separate environments or CI jobs.
