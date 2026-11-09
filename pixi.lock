@@ -518,6 +518,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -928,6 +929,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
   default:
     channels:
@@ -1006,6 +1008,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.6.3-pyhd8ed1ab_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       linux-64-cuda:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -1078,6 +1081,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -1151,6 +1155,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/urllib3-2.7.0-pyhd8ed1ab_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.4.0-pyhcf101f3_0.conda
@@ -1218,6 +1223,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.4.0-pyhcf101f3_0.conda
@@ -1285,6 +1291,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
   dev:
     channels:
@@ -1414,6 +1421,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       linux-64-cuda:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -1539,6 +1547,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/xmltodict-1.0.4-pyhcf101f3_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -1665,6 +1674,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/xmltodict-1.0.4-pyhcf101f3_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -1781,6 +1791,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
@@ -1899,6 +1910,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
   test:
     channels:
@@ -2022,6 +2034,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.0-pyhcf101f3_1.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       linux-64-cuda:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -2142,6 +2155,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/xmltodict-1.0.4-pyhcf101f3_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       linux-aarch64:
       - conda: https://conda.anaconda.org/conda-forge/linux-aarch64/_openmp_mutex-4.5-20_gnu.conda
@@ -2263,6 +2277,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/xmltodict-1.0.4-pyhcf101f3_0.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.4.0-pyhcf101f3_0.conda
@@ -2374,6 +2389,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiobotocore-3.4.0-pyhcf101f3_0.conda
@@ -2486,6 +2502,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: ./
       - pypi: ./packages/aws
+      - pypi: ./packages/brev
       - pypi: ./packages/core
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -15225,6 +15242,7 @@ packages:
   requires_dist:
   - benchmarking-orchestration-core>=0.1.0,<0.2
   - benchmarking-aws>=0.1.0,<0.2
+  - benchmarking-brev>=0.1.0,<0.2
   - cyclopts>=4.10.1
   - fsspec>=2026.6.0,<2027
   - s3fs>=2026.6.0,<2027
@@ -15237,6 +15255,11 @@ packages:
   - benchmarking-orchestration-core>=0.1.0,<0.2
   - boto3>=1.42.81,<2
   - requests>=2,<3
+  requires_python: '>=3.11'
+- pypi: ./packages/brev
+  name: benchmarking-brev
+  requires_dist:
+  - benchmarking-orchestration-core>=0.1.0,<0.2
   requires_python: '>=3.11'
 - pypi: ./packages/core
   name: benchmarking-orchestration-core
