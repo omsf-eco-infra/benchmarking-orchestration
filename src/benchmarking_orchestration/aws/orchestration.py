@@ -2,36 +2,29 @@
 
 from __future__ import annotations
 
-import time as _time
 from collections.abc import Mapping as _Mapping
 from pathlib import Path as _Path
 
-from exorcist.taskdb import _logger
-
-from benchmarking_orchestration_core import cloud_init as _cloud_init
-from benchmarking_orchestration_core import task_id as _task_id
-from benchmarking_orchestration_core.benchmark_kind import (
-    BenchmarkKind as _BenchmarkKind,
-)
-from benchmarking_orchestration_core.capabilities import (
+from benchmarking_aws import cloud_init as _cloud_init
+from benchmarking_aws import task_id as _task_id
+from benchmarking_aws.capabilities import (
     WorkerCapability as _WorkerCapability,
     _resolve_bench_worker_capability,
 )
-
-from ..tasks import TaskStatusDB as _TaskStatusDB
-from . import (
-    get_instance_type_vcpu_count as _get_instance_type_vcpu_count,
+from benchmarking_aws.client import (
     get_launch_ami_details as _get_launch_ami_details,
-    get_ondemand_g_vcpu_quota as _get_ondemand_g_vcpu_quota,
-    get_ondemand_g_vcpus_used as _get_ondemand_g_vcpus_used,
-    get_ondemand_p_vcpu_quota as _get_ondemand_p_vcpu_quota,
-    get_ondemand_p_vcpus_used as _get_ondemand_p_vcpus_used,
     launch_ec2_instance as _launch_ec2_instance,
     validate_launch_instance_type as _validate_launch_instance_type,
 )
+from benchmarking_aws.launch import (
+    launch_with_capacity_retry as _launch_with_capacity_retry,
+    validate_expected_ami as _validate_expected_ami,
+)
+from benchmarking_orchestration_core.benchmark_kind import (
+    BenchmarkKind as _BenchmarkKind,
+)
 
-_CAPACITY_RETRY_SLEEP_SECONDS = 60 * 15
-_WIGGLE_ROOM = 8
+from ..tasks import TaskStatusDB as _TaskStatusDB
 
 
 def _run_benchmark(**kwargs) -> None:
@@ -45,152 +38,6 @@ def _run_benchmark(**kwargs) -> None:
     from ..bench import run_benchmark
 
     run_benchmark(**kwargs)
-
-
-def _validate_expected_ami(task_ami_id: str, expected_ami_id: str | None) -> None:
-    """Validate a task AMI against an explicitly approved AMI.
-
-    Parameters
-    ----------
-    task_ami_id : str
-        AMI identifier embedded in the launch task.
-    expected_ami_id : str | None
-        Approved AMI identifier, or ``None`` to allow the task AMI.
-
-    Raises
-    ------
-    RuntimeError
-        If the task and approved AMI identifiers differ.
-    """
-    if expected_ami_id is None:
-        return
-
-    if task_ami_id != expected_ami_id.strip().lower():
-        raise RuntimeError(
-            "Queued launch task AMI does not match the approved AMI. "
-            f"Task AMI: '{task_ami_id}'. Approved AMI: '{expected_ami_id}'."
-        )
-
-
-def _wait_for_ondemand_vcpu_quota(task: str, instance_type: str, region: str) -> None:
-    """Wait until the instance family's On-Demand quota permits a launch.
-
-    Parameters
-    ----------
-    task : str
-        Launch task identifier.
-    instance_type : str
-        EC2 instance type requested by the task.
-    region : str
-        AWS region containing the requested capacity.
-    """
-    needed_vcpus = _get_instance_type_vcpu_count(instance_type, region=region)
-    if instance_type.startswith("p"):
-        get_quota = _get_ondemand_p_vcpu_quota
-        get_used = _get_ondemand_p_vcpus_used
-        wiggle_room = 0  # A P instance can consume the entire quota by itself.
-    else:
-        get_quota = _get_ondemand_g_vcpu_quota
-        get_used = _get_ondemand_g_vcpus_used
-        wiggle_room = _WIGGLE_ROOM
-    quota = get_quota(region=region)
-    used = get_used(region=region)
-    available = max(quota - used - wiggle_room, 0)
-    if needed_vcpus <= available:
-        return
-
-    _logger.warning(
-        f"Insufficient vCPU quota to launch '{task}': "
-        f"needed={needed_vcpus}, available={available} "
-        f"(quota={quota}, used={used}). Waiting for capacity..."
-    )
-    while needed_vcpus > available:
-        _time.sleep(_CAPACITY_RETRY_SLEEP_SECONDS)
-        quota = get_quota(region=region)
-        used = get_used(region=region)
-        available = max(quota - used - wiggle_room, 0)
-
-
-def _is_insufficient_instance_capacity_error(exc: BaseException) -> bool:
-    """Return whether an exception represents EC2 capacity exhaustion.
-
-    Parameters
-    ----------
-    exc : BaseException
-        Exception raised during EC2 launch.
-
-    Returns
-    -------
-    bool
-        Whether the error code is ``InsufficientInstanceCapacity``.
-    """
-    if "InsufficientInstanceCapacity" in str(exc):
-        return True
-
-    cause = getattr(exc, "__cause__", None)
-    response = getattr(cause, "response", {}) if cause is not None else {}
-    error = response.get("Error", {}) if isinstance(response, dict) else {}
-    return error.get("Code") == "InsufficientInstanceCapacity"
-
-
-def _launch_with_capacity_retry(
-    task: str,
-    instance_type: str,
-    ami_id: str,
-    region: str,
-    user_data: str | None,
-    key_name: str | None,
-    instance_profile_name: str | None,
-) -> str:
-    """Launch an instance after quota waits and retry capacity failures.
-
-    Parameters
-    ----------
-    task : str
-        Launch task identifier.
-    instance_type : str
-        EC2 instance type.
-    ami_id : str
-        AMI identifier.
-    region : str
-        AWS region.
-    user_data : str | None
-        Optional EC2 user data.
-    key_name : str | None
-        Optional EC2 key pair name.
-    instance_profile_name : str | None
-        Optional IAM instance profile name.
-
-    Returns
-    -------
-    str
-        Launched EC2 instance identifier.
-
-    Notes
-    -----
-    Capacity failures retry indefinitely. Other AWS errors, including expired
-    SSO credentials, stop the loop so the user can intervene and reauthenticate.
-    """
-    while True:
-        _wait_for_ondemand_vcpu_quota(task, instance_type, region)
-        try:
-            return _launch_ec2_instance(
-                instance_type,
-                ami_id=ami_id,
-                region=region,
-                user_data=user_data,
-                key_name=key_name,
-                instance_profile_name=instance_profile_name,
-            )
-        except Exception as exc:
-            if not _is_insufficient_instance_capacity_error(exc):
-                raise
-            _logger.warning(
-                f"Insufficient EC2 instance capacity while launching '{task}'. "
-                f"Retrying in {_CAPACITY_RETRY_SLEEP_SECONDS} seconds. "
-                f"Original error: {exc}"
-            )
-            _time.sleep(_CAPACITY_RETRY_SLEEP_SECONDS)
 
 
 def queue_aws_tasks(

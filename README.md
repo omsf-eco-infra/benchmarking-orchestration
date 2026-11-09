@@ -74,6 +74,20 @@ The top-level `benchmark_kind`, `mps_process_count`, `s3_bucket`, `s3_prefix`,
 and `timestamps` fields remain. AWS instance metadata fields may be present
 when the EC2 metadata service is available.
 
+## Packages
+
+Package boundaries follow semantics:
+
+- `packages/core/` (`benchmarking_orchestration_core`): provider-neutral benchmark
+  contract and workload kinds, with no runtime dependencies.
+- `packages/aws/` (`benchmarking_aws`): EC2/AMI/quota operations, metadata,
+  AWS worker capabilities, task formats, and bootstrap helpers.
+- Root application (`benchmarking_orchestration`): CLI, task database,
+  benchmark runner, and integration with AWS.
+
+See [package boundaries](docs/package-boundaries.md) for dependency direction
+and canonical imports. Pixi installs all three local distributions together.
+
 ## Requirements
 
 - `pixi`
@@ -237,17 +251,17 @@ When you pass `--cloud-init-file`, the file is rendered as a template using envi
 Run tests:
 
 ```bash
-pixi run test
+pixi run --environment dev --clean-env test
 ```
 
 Format:
 
 ```bash
-pixi run fmt
+pixi run --environment dev fmt
 ```
 
 Lint:
 
 ```bash
-pixi run check
+pixi run --environment dev check
 ```

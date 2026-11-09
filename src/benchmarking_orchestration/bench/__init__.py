@@ -427,7 +427,7 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
                 },
             }
             try:
-                from benchmarking_orchestration.aws.info import MetadataService
+                from benchmarking_aws.info import MetadataService
 
                 metadata = MetadataService()
                 manifest["instance_id"] = metadata.instance_id()

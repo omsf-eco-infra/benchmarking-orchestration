@@ -1,6 +1,6 @@
 import pytest
 
-from benchmarking_orchestration_core.capabilities import (
+from benchmarking_aws.capabilities import (
     WorkerCapability,
     _resolve_bench_worker_capability,
 )
@@ -10,6 +10,8 @@ from benchmarking_orchestration_core.capabilities import (
     ("instance_type", "capability"),
     [
         ("g3.4xlarge", WorkerCapability.G3),
+        ("g4dn.xlarge", WorkerCapability.G4DN),
+        ("g6e.xlarge", WorkerCapability.G6E),
         ("g5.xlarge", WorkerCapability.G5),
         ("g6.xlarge", WorkerCapability.G6),
         ("p4d.24xlarge", WorkerCapability.P),

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import uuid
 
-from .benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
+from benchmarking_orchestration_core.benchmark_kind import (
+    BenchmarkKind,
+    _normalize_benchmark_kind,
+)
 
 
 def _build_task_id(

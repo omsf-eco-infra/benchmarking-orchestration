@@ -1,6 +1,11 @@
 # Monorepo / subpackage exploration
 
-Status: **design record, implemented.** This document records the exploration
+Status: **historical design record of the initial extraction.** The later
+[semantic package boundaries](package-boundaries.md) supersede this document:
+AWS task formats, EC2 capabilities, and bootstrap helpers are no longer core;
+they now live with the AWS client in the `benchmarking_aws` distribution.
+
+This document records the exploration
 and the resulting package boundaries for the `benchmarking-orchestration`
 repository. The recommended two-distribution layout has now been built on branch
 `explore/monorepo-subpackages` (base commit `0fa3f9f`, equal to `main`); see

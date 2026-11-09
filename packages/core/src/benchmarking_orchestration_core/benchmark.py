@@ -15,5 +15,6 @@ class AbstractBenchmark(abc.ABC):
         Parameters
         ----------
         task_id : str
-            Identifier of the benchmark task.
+            Opaque identifier of the benchmark task. Provider-specific metadata
+            and task encoding are defined outside core.
         """
