@@ -6,6 +6,7 @@ version = "0.1.0"
 dependencies = [
     "benchmarking-orchestration-core>=0.1.0,<0.2",
     "benchmarking-aws>=0.1.0,<0.2",
+    "benchmarking-brev>=0.1.0,<0.2",
     "cyclopts>=4.10.1",
     "fsspec>=2026.6.0,<2027",
     "s3fs>=2026.6.0,<2027",
@@ -31,6 +32,7 @@ platforms = [
 benchmarking_orchestration = { path = ".", editable = true }
 benchmarking-orchestration-core = { path = "packages/core", editable = true }
 benchmarking-aws = { path = "packages/aws", editable = true }
+benchmarking-brev = { path = "packages/brev", editable = true }
 
 [tool.pixi.dependencies]
 cyclopts = ">=4.10.1"
@@ -74,7 +76,7 @@ openfe = ">=1.10.0,<2"
 pandas = ">=2.3.3,<3"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "packages/core/tests", "packages/aws/tests"]
+testpaths = ["tests", "packages/core/tests", "packages/aws/tests", "packages/brev/tests"]
 
 [tool.ty.environment]
 python = ".pixi/envs/dev/bin/python"
