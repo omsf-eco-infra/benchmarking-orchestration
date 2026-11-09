@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 from typing import Iterable
 
+import benchmarking_aws.launch as aws_launch
 import pytest
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
 
 import benchmarking_orchestration.aws.orchestration as orchestration
 from benchmarking_orchestration.aws import (
@@ -14,7 +16,6 @@ from benchmarking_orchestration.aws import (
     process_aws_launch_task,
     queue_aws_tasks,
 )
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
 from benchmarking_orchestration.tasks import TaskStatusDB
 
 
@@ -260,16 +261,16 @@ def test_process_launch_task_retries_capacity(monkeypatch):
     sleeps = []
     quota_regions = []
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_instance_type_vcpu_count",
         lambda _type, region: 4,
     )
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_ondemand_g_vcpu_quota",
-        lambda region: quota_regions.append(region) or orchestration._WIGGLE_ROOM + 4,
+        lambda region: quota_regions.append(region) or aws_launch._WIGGLE_ROOM + 4,
     )
-    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpus_used", lambda region: 0)
+    monkeypatch.setattr(aws_launch, "_get_ondemand_g_vcpus_used", lambda region: 0)
 
     def _launch(*_args, **_kwargs):
         launches.append(1)
@@ -277,15 +278,15 @@ def test_process_launch_task_retries_capacity(monkeypatch):
             raise RuntimeError("InsufficientInstanceCapacity")
         return "i-123"
 
-    monkeypatch.setattr(orchestration, "_launch_ec2_instance", _launch)
+    monkeypatch.setattr(aws_launch, "_launch_ec2_instance", _launch)
     monkeypatch.setattr(
-        orchestration._time, "sleep", lambda seconds: sleeps.append(seconds)
+        aws_launch._time, "sleep", lambda seconds: sleeps.append(seconds)
     )
 
     assert process_aws_launch_task(task_db, task, retry_for_capacity=True) == "i-123"
     assert len(launches) == 2
     assert quota_regions == ["us-east-1", "us-east-1"]
-    assert sleeps == [orchestration._CAPACITY_RETRY_SLEEP_SECONDS]
+    assert sleeps == [aws_launch._CAPACITY_RETRY_SLEEP_SECONDS]
     assert task_db.mark_calls == [{"taskid": task, "success": True}]
 
 
@@ -296,37 +297,35 @@ def test_quota_wait_uses_task_region_for_recheck(monkeypatch):
     vcpu_calls = []
     quota_calls = []
     usage_calls = []
-    quota_values = iter(
-        [orchestration._WIGGLE_ROOM + 3, orchestration._WIGGLE_ROOM + 4]
-    )
+    quota_values = iter([aws_launch._WIGGLE_ROOM + 3, aws_launch._WIGGLE_ROOM + 4])
     sleeps = []
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_instance_type_vcpu_count",
         lambda instance_type, region: vcpu_calls.append((instance_type, region)) or 4,
     )
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_ondemand_g_vcpu_quota",
         lambda region: quota_calls.append(region) or next(quota_values),
     )
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_ondemand_g_vcpus_used",
         lambda region: usage_calls.append(region) or 0,
     )
     monkeypatch.setattr(
-        orchestration, "_launch_ec2_instance", lambda *_args, **_kwargs: "i-123"
+        aws_launch, "_launch_ec2_instance", lambda *_args, **_kwargs: "i-123"
     )
     monkeypatch.setattr(
-        orchestration._time, "sleep", lambda seconds: sleeps.append(seconds)
+        aws_launch._time, "sleep", lambda seconds: sleeps.append(seconds)
     )
 
     assert process_aws_launch_task(task_db, task, retry_for_capacity=True) == "i-123"
     assert vcpu_calls == [("g5.xlarge", "eu-west-1")]
     assert quota_calls == ["eu-west-1", "eu-west-1"]
     assert usage_calls == ["eu-west-1", "eu-west-1"]
-    assert sleeps == [orchestration._CAPACITY_RETRY_SLEEP_SECONDS]
+    assert sleeps == [aws_launch._CAPACITY_RETRY_SLEEP_SECONDS]
 
 
 def test_p_launch_waits_for_p_vcpu_quota(monkeypatch):
@@ -341,26 +340,26 @@ def test_p_launch_waits_for_p_vcpu_quota(monkeypatch):
         """Fail if a G/VT quota helper is queried for a P launch."""
         raise AssertionError("G/VT quota preflight queried for P instance")
 
-    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpu_quota", _unexpected)
-    monkeypatch.setattr(orchestration, "_get_ondemand_g_vcpus_used", _unexpected)
+    monkeypatch.setattr(aws_launch, "_get_ondemand_g_vcpu_quota", _unexpected)
+    monkeypatch.setattr(aws_launch, "_get_ondemand_g_vcpus_used", _unexpected)
     monkeypatch.setattr(
-        orchestration, "_get_instance_type_vcpu_count", lambda _type, region: 96
+        aws_launch, "_get_instance_type_vcpu_count", lambda _type, region: 96
     )
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_ondemand_p_vcpu_quota",
         lambda region: calls.append(("quota", region)) or next(remaining_quota),
     )
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_get_ondemand_p_vcpus_used",
         lambda region: calls.append(("used", region)) or next(used_vcpus),
     )
     monkeypatch.setattr(
-        orchestration._time, "sleep", lambda seconds: calls.append(("sleep", seconds))
+        aws_launch._time, "sleep", lambda seconds: calls.append(("sleep", seconds))
     )
     monkeypatch.setattr(
-        orchestration,
+        aws_launch,
         "_launch_ec2_instance",
         lambda *_args, **_kwargs: calls.append(("launch", "eu-west-1")) or "i-123",
     )
@@ -369,7 +368,7 @@ def test_p_launch_waits_for_p_vcpu_quota(monkeypatch):
     assert calls == [
         ("quota", "eu-west-1"),
         ("used", "eu-west-1"),
-        ("sleep", orchestration._CAPACITY_RETRY_SLEEP_SECONDS),
+        ("sleep", aws_launch._CAPACITY_RETRY_SLEEP_SECONDS),
         ("quota", "eu-west-1"),
         ("used", "eu-west-1"),
         ("launch", "eu-west-1"),

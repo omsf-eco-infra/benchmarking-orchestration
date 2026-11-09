@@ -1,9 +1,26 @@
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
-from benchmarking_orchestration.task_id import (
+import pytest
+from benchmarking_aws.task_id import (
     _build_bench_task_id,
+    _build_task_id,
     _parse_bench_task_id,
     _parse_bench_task_metadata,
+    _parse_launch_task_id,
 )
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
+
+
+@pytest.mark.parametrize("cloud_init_b64", [None, "IyEvYmluL3NoCg=="])
+def test_aws_launch_task_round_trips_provider_metadata(cloud_init_b64):
+    """Preserve existing AWS task formats with and without bootstrap data."""
+    task_id = _build_task_id("us-east-1", "g5.xlarge", "ami-1234", cloud_init_b64)
+
+    assert _parse_launch_task_id(task_id) == (
+        "us-east-1",
+        "g5.xlarge",
+        "ami-1234",
+        cloud_init_b64,
+    )
+    assert len(task_id.split(":")) == (4 if cloud_init_b64 is None else 5)
 
 
 def test_build_bench_task_id_omits_mps_metadata_for_default_count():
