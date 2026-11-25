@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import abc
 import contextlib
 import hashlib
 import importlib
@@ -19,9 +18,11 @@ import s3fs
 from fsspec.implementations.github import GithubFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
-from benchmarking_orchestration.aws.info import MetadataService
-
-from ..benchmark_kind import BenchmarkKind, _normalize_benchmark_kind
+from benchmarking_orchestration_core.benchmark import AbstractBenchmark
+from benchmarking_orchestration_core.benchmark_kind import (
+    BenchmarkKind,
+    _normalize_benchmark_kind,
+)
 
 _DEFAULT_BENCHMARK_JSON = "ross_dodecahedron_jacs.json"
 _RESULT_MANIFEST_SCHEMA_VERSION = 5
@@ -239,20 +240,6 @@ def _run_benchmark_subprocess_entrypoint(
     return int(error is not None)
 
 
-class AbstractBenchmark(abc.ABC):
-    """Base class for benchmark implementations."""
-
-    @abc.abstractmethod
-    def run_benchmark(self, task_id: str) -> None:
-        """Run one benchmark task.
-
-        Parameters
-        ----------
-        task_id : str
-            Identifier of the benchmark task.
-        """
-
-
 class AWSOpenFEBenchmark(AbstractBenchmark):
     """Run OpenFE benchmarks using fsspec source and artifact filesystems."""
 
@@ -440,6 +427,8 @@ class AWSOpenFEBenchmark(AbstractBenchmark):
                 },
             }
             try:
+                from benchmarking_aws.info import MetadataService
+
                 metadata = MetadataService()
                 manifest["instance_id"] = metadata.instance_id()
                 manifest["instance_type"] = metadata.instance_type()

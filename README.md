@@ -74,6 +74,20 @@ The top-level `benchmark_kind`, `mps_process_count`, `s3_bucket`, `s3_prefix`,
 and `timestamps` fields remain. AWS instance metadata fields may be present
 when the EC2 metadata service is available.
 
+## Packages
+
+Package boundaries follow semantics:
+
+- `packages/core/` (`benchmarking_orchestration_core`): provider-neutral benchmark
+  contract and workload kinds, with no runtime dependencies.
+- `packages/aws/` (`benchmarking_aws`): EC2/AMI/quota operations, metadata,
+  AWS worker capabilities, task formats, and bootstrap helpers.
+- Root application (`benchmarking_orchestration`): CLI, task database,
+  benchmark runner, and integration with AWS.
+
+See [package boundaries](docs/package-boundaries.md) for dependency direction
+and canonical imports. Pixi installs all three local distributions together.
+
 ## Requirements
 
 - `pixi`
@@ -234,20 +248,29 @@ When you pass `--cloud-init-file`, the file is rendered as a template using envi
 
 ## Development
 
-Run tests:
+Run all tests (library unit tests, app tests, and cross-package checks):
 
 ```bash
-pixi run test
+pixi run --environment dev --clean-env test
+```
+
+Library unit tests live in `packages/core/tests/` and `packages/aws/tests/`.
+App tests and cross-package boundary/integration tests remain in root `tests/`.
+All suites share the same Pixi environment and CI command. To run one library:
+
+```bash
+pixi run --environment dev pytest packages/core/tests
+pixi run --environment dev pytest packages/aws/tests
 ```
 
 Format:
 
 ```bash
-pixi run fmt
+pixi run --environment dev fmt
 ```
 
 Lint:
 
 ```bash
-pixi run check
+pixi run --environment dev check
 ```

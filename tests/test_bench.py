@@ -10,7 +10,7 @@ from benchmarking_orchestration.bench import (
     AWSOpenFEBenchmark,
     _aggregate_child_outputs,
 )
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
 
 
 def _benchmark_repo(tmp_path: Path) -> Path:

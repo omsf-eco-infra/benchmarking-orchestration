@@ -6,7 +6,7 @@ from botocore.exceptions import EndpointConnectionError, WaiterError
 from botocore.stub import Stubber
 from moto import mock_aws
 
-from benchmarking_orchestration.aws import (
+from benchmarking_aws.client import (
     _extract_running_ondemand_g_instance_types,
     _is_launch_supported_instance_type,
     _is_ondemand_g_or_vt_instance_type,

@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from benchmarking_aws.capabilities import WorkerCapability
+from benchmarking_orchestration_core.benchmark_kind import BenchmarkKind
 
 import benchmarking_orchestration.providers.aws_cli as aws_cli_module
-from benchmarking_orchestration.benchmark_kind import BenchmarkKind
-from benchmarking_orchestration.capabilities import WorkerCapability
 from benchmarking_orchestration.providers.aws_cli import AwsCLI
 
 _BENCH_TASK = (
