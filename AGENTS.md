@@ -13,9 +13,15 @@ Practical guidance for coding agents working in this repository.
   `benchmarking_aws`). It owns EC2/AMI/quota operations, instance metadata,
   AWS worker capabilities, AWS task IDs, and bootstrap rendering. It depends on
   core and AWS/HTTP libraries, never on the application.
+- `packages/brev/` is the `benchmarking-brev` distribution (import name
+  `benchmarking_brev`). It owns Brev task formats, CLI transport, and bounded
+  readiness policy. It depends only on core; never import app, AWS, persistence,
+  or CLI-framework code into it. The external Brev CLI runs only on the controller.
 - `src/benchmarking_orchestration/` is the application distribution: CLI
   (`commands`, `__main__`), provider adapters, task DB, and benchmark runner.
-  `aws/orchestration.py` connects AWS primitives to app persistence and execution.
+  `aws/orchestration.py` and `brev/orchestration.py` connect provider primitives
+  to app persistence and execution. `job_worker.py` executes staged credentialless
+  jobs; benchmark execution and job/marker schemas stay in the app, not core.
   Its top-level `__init__` is lazy, so importing the app must not require `boto3`.
 - `tests/test_boundaries.py` guards semantic ownership, import direction, and
   lazy-import behavior.
@@ -30,16 +36,17 @@ Practical guidance for coding agents working in this repository.
   - `pixi run python -m benchmarking_orchestration`
 
 ## Testing
-- Library unit tests live beside their packages: `packages/core/tests/` and
-  `packages/aws/tests/`. App tests and cross-package boundary/integration tests
+- Library unit tests live beside their packages: `packages/core/tests/`,
+  `packages/aws/tests/`, and `packages/brev/tests/`. App tests and boundary/integration tests
   remain in root `tests/`.
-- Root `pyproject.toml` configures discovery for all three test directories.
+- Root `pyproject.toml` configures discovery for all four test directories.
   Keep one Pixi environment and one CI test command.
 - Run the full test suite:
   - `pixi run --environment dev --clean-env test`
 - Run one library suite:
   - `pixi run --environment dev pytest packages/core/tests`
   - `pixi run --environment dev pytest packages/aws/tests`
+  - `pixi run --environment dev pytest packages/brev/tests`
 
 ## Formatting
 - `pixi run --environment dev fmt`
