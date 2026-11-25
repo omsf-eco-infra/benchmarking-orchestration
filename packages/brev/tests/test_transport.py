@@ -77,7 +77,13 @@ def test_transport_runs_required_brev_argument_lists(monkeypatch) -> None:
         ["brev", "delete", "brev-job"],
     ]
     assert all(
-        kwargs == {"capture_output": True, "check": True, "text": True}
+        kwargs
+        == {
+            "stdin": subprocess.DEVNULL,
+            "capture_output": True,
+            "check": True,
+            "text": True,
+        }
         for _command, kwargs in calls
     )
 
