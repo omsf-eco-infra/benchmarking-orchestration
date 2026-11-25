@@ -41,6 +41,7 @@ class BrevTransport:
             If the command exceeds the supplied ``timeout``.
         """
         options: dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
             "capture_output": True,
             "check": True,
             "text": True,
